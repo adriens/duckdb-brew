@@ -42,11 +42,26 @@ struct BrewPackage {
 	string tap;
 	string license;
 	bool installed_as_dependency;
+	bool outdated;
+	bool pinned;
+	bool deprecated;
+	bool disabled;
+	bool poured_from_bottle;
+	bool built_as_bottle;
+	string dependencies;
+	string aliases;
+	string deprecation_reason;
+	string disable_reason;
+	string caveats;
 };
 
 static string GetStringValue(const ComplexJSON &obj, const string &key) {
 	try {
-		return obj.GetValue(key);
+		string val = obj.GetValue(key);
+		if (val == "null") {
+			return "";
+		}
+		return val;
 	} catch (...) {
 		return "";
 	}
@@ -67,6 +82,30 @@ static int64_t GetInt64Value(const ComplexJSON &obj, const string &key) {
 		return std::stoll(val);
 	} catch (...) {
 		return 0;
+	}
+}
+
+static string GetArrayAsCommaSeparated(ComplexJSON &obj, const string &key) {
+	try {
+		auto &arr = obj.GetObject(key);
+		string result;
+		idx_t i = 0;
+		while (true) {
+			try {
+				auto &elem = arr.GetArrayElement(i);
+				string val = ComplexJSON::GetValueRecursive(elem);
+				if (!result.empty()) {
+					result += ", ";
+				}
+				result += val;
+				i++;
+			} catch (...) {
+				break;
+			}
+		}
+		return result;
+	} catch (...) {
+		return "";
 	}
 }
 
@@ -91,6 +130,21 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 					pkg.homepage = GetStringValue(formula, "homepage");
 					pkg.tap = GetStringValue(formula, "tap");
 					pkg.license = GetStringValue(formula, "license");
+					
+					// Status flags
+					pkg.outdated = GetBoolValue(formula, "outdated");
+					pkg.pinned = GetBoolValue(formula, "pinned");
+					pkg.deprecated = GetBoolValue(formula, "deprecated");
+					pkg.disabled = GetBoolValue(formula, "disabled");
+					
+					// Deprecation/disable info
+					pkg.deprecation_reason = GetStringValue(formula, "deprecation_reason");
+					pkg.disable_reason = GetStringValue(formula, "disable_reason");
+					pkg.caveats = GetStringValue(formula, "caveats");
+					
+					// Dependencies and aliases
+					pkg.dependencies = GetArrayAsCommaSeparated(formula, "dependencies");
+					pkg.aliases = GetArrayAsCommaSeparated(formula, "aliases");
 
 					// Get version and installed_on_request from installed array
 					try {
@@ -101,17 +155,23 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 							pkg.installed_on_request = GetBoolValue(inst_info, "installed_on_request");
 							pkg.installed_time = GetInt64Value(inst_info, "time");
 							pkg.installed_as_dependency = GetBoolValue(inst_info, "installed_as_dependency");
+							pkg.poured_from_bottle = GetBoolValue(inst_info, "poured_from_bottle");
+							pkg.built_as_bottle = GetBoolValue(inst_info, "built_as_bottle");
 						} catch (...) {
 							pkg.version = "";
 							pkg.installed_on_request = false;
 							pkg.installed_time = 0;
 							pkg.installed_as_dependency = false;
+							pkg.poured_from_bottle = false;
+							pkg.built_as_bottle = false;
 						}
 					} catch (...) {
 						pkg.version = "";
 						pkg.installed_on_request = false;
 						pkg.installed_time = 0;
 						pkg.installed_as_dependency = false;
+						pkg.poured_from_bottle = false;
+						pkg.built_as_bottle = false;
 					}
 
 					if (!pkg.name.empty()) {
@@ -144,8 +204,23 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 					pkg.version = GetStringValue(cask, "version");
 					pkg.tap = GetStringValue(cask, "tap");
 					pkg.installed_time = GetInt64Value(cask, "installed_time");
-					pkg.license = "";                    // Casks don't typically have license in the JSON
-					pkg.installed_as_dependency = false; // Casks are always installed on request
+					
+					// Cask-specific defaults
+					pkg.license = "";
+					pkg.installed_as_dependency = false;
+					pkg.poured_from_bottle = false;
+					pkg.built_as_bottle = false;
+					pkg.dependencies = "";
+					
+					// Status flags
+					pkg.outdated = GetBoolValue(cask, "outdated");
+					pkg.pinned = false; // Casks don't get pinned
+					pkg.deprecated = GetBoolValue(cask, "deprecated");
+					pkg.disabled = GetBoolValue(cask, "disabled");
+					pkg.deprecation_reason = GetStringValue(cask, "deprecation_reason");
+					pkg.disable_reason = GetStringValue(cask, "disable_reason");
+					pkg.caveats = GetStringValue(cask, "caveats");
+					pkg.aliases = GetArrayAsCommaSeparated(cask, "old_tokens");
 
 					if (!pkg.name.empty()) {
 						packages.push_back(pkg);
@@ -226,6 +301,39 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
+	
+	names.emplace_back("outdated");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("pinned");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("deprecated");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("disabled");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("poured_from_bottle");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("built_as_bottle");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("dependencies");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("aliases");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("deprecation_reason");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("disable_reason");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("caveats");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return std::move(result);
 }
@@ -275,6 +383,39 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
+	
+	names.emplace_back("outdated");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("pinned");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("deprecated");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("disabled");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("poured_from_bottle");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("built_as_bottle");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("dependencies");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("aliases");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("deprecation_reason");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("disable_reason");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("caveats");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return std::move(result);
 }
@@ -315,6 +456,39 @@ static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunct
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
+	
+	names.emplace_back("outdated");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("pinned");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("deprecated");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("disabled");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("poured_from_bottle");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("built_as_bottle");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+	
+	names.emplace_back("dependencies");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("aliases");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("deprecation_reason");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("disable_reason");
+	return_types.emplace_back(LogicalType::VARCHAR);
+	
+	names.emplace_back("caveats");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return std::move(result);
 }
@@ -337,6 +511,17 @@ static void BrewPackagesFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(7, count, pkg.installed_on_request);
 		output.SetValue(8, count, pkg.installed_as_dependency);
 		output.SetValue(9, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
+		output.SetValue(10, count, pkg.outdated);
+		output.SetValue(11, count, pkg.pinned);
+		output.SetValue(12, count, pkg.deprecated);
+		output.SetValue(13, count, pkg.disabled);
+		output.SetValue(14, count, pkg.poured_from_bottle);
+		output.SetValue(15, count, pkg.built_as_bottle);
+		output.SetValue(16, count, pkg.dependencies.empty() ? Value() : Value(pkg.dependencies));
+		output.SetValue(17, count, pkg.aliases.empty() ? Value() : Value(pkg.aliases));
+		output.SetValue(18, count, pkg.deprecation_reason.empty() ? Value() : Value(pkg.deprecation_reason));
+		output.SetValue(19, count, pkg.disable_reason.empty() ? Value() : Value(pkg.disable_reason));
+		output.SetValue(20, count, pkg.caveats.empty() ? Value() : Value(pkg.caveats));
 
 		count++;
 	}
@@ -362,6 +547,17 @@ static void BrewFormulasFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(6, count, pkg.installed_on_request);
 		output.SetValue(7, count, pkg.installed_as_dependency);
 		output.SetValue(8, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
+		output.SetValue(9, count, pkg.outdated);
+		output.SetValue(10, count, pkg.pinned);
+		output.SetValue(11, count, pkg.deprecated);
+		output.SetValue(12, count, pkg.disabled);
+		output.SetValue(13, count, pkg.poured_from_bottle);
+		output.SetValue(14, count, pkg.built_as_bottle);
+		output.SetValue(15, count, pkg.dependencies.empty() ? Value() : Value(pkg.dependencies));
+		output.SetValue(16, count, pkg.aliases.empty() ? Value() : Value(pkg.aliases));
+		output.SetValue(17, count, pkg.deprecation_reason.empty() ? Value() : Value(pkg.deprecation_reason));
+		output.SetValue(18, count, pkg.disable_reason.empty() ? Value() : Value(pkg.disable_reason));
+		output.SetValue(19, count, pkg.caveats.empty() ? Value() : Value(pkg.caveats));
 
 		count++;
 	}
@@ -384,6 +580,17 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 		output.SetValue(3, count, pkg.description);
 		output.SetValue(4, count, pkg.homepage);
 		output.SetValue(5, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
+		output.SetValue(6, count, pkg.outdated);
+		output.SetValue(7, count, pkg.pinned);
+		output.SetValue(8, count, pkg.deprecated);
+		output.SetValue(9, count, pkg.disabled);
+		output.SetValue(10, count, pkg.poured_from_bottle);
+		output.SetValue(11, count, pkg.built_as_bottle);
+		output.SetValue(12, count, pkg.dependencies.empty() ? Value() : Value(pkg.dependencies));
+		output.SetValue(13, count, pkg.aliases.empty() ? Value() : Value(pkg.aliases));
+		output.SetValue(14, count, pkg.deprecation_reason.empty() ? Value() : Value(pkg.deprecation_reason));
+		output.SetValue(15, count, pkg.disable_reason.empty() ? Value() : Value(pkg.disable_reason));
+		output.SetValue(16, count, pkg.caveats.empty() ? Value() : Value(pkg.caveats));
 
 		count++;
 	}
