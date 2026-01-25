@@ -197,6 +197,9 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 
 	result->packages = ParseBrewJSON(brew_output);
 
+	names.emplace_back("tap");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
 	names.emplace_back("name");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
@@ -210,9 +213,6 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("homepage");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("tap");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("license");
@@ -249,6 +249,9 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 		}
 	}
 
+	names.emplace_back("tap");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
 	names.emplace_back("name");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
@@ -259,9 +262,6 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("homepage");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("tap");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("license");
@@ -298,6 +298,9 @@ static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunct
 		}
 	}
 
+	names.emplace_back("tap");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
 	names.emplace_back("name");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
@@ -308,9 +311,6 @@ static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunct
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("homepage");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
-	names.emplace_back("tap");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("installed_time");
@@ -327,12 +327,12 @@ static void BrewPackagesFunction(ClientContext &context, TableFunctionInput &dat
 	for (idx_t i = local_state.batch_index; i < data.packages.size() && count < STANDARD_VECTOR_SIZE; i++) {
 		auto &pkg = data.packages[i];
 
-		output.SetValue(0, count, pkg.name);
-		output.SetValue(1, count, pkg.version);
-		output.SetValue(2, count, pkg.type);
-		output.SetValue(3, count, pkg.description);
-		output.SetValue(4, count, pkg.homepage);
-		output.SetValue(5, count, pkg.tap);
+		output.SetValue(0, count, pkg.tap);
+		output.SetValue(1, count, pkg.name);
+		output.SetValue(2, count, pkg.version);
+		output.SetValue(3, count, pkg.type);
+		output.SetValue(4, count, pkg.description);
+		output.SetValue(5, count, pkg.homepage);
 		output.SetValue(6, count, pkg.license);
 		output.SetValue(7, count, pkg.installed_on_request);
 		output.SetValue(8, count, pkg.installed_as_dependency);
@@ -353,11 +353,11 @@ static void BrewFormulasFunction(ClientContext &context, TableFunctionInput &dat
 	for (idx_t i = local_state.batch_index; i < data.packages.size() && count < STANDARD_VECTOR_SIZE; i++) {
 		auto &pkg = data.packages[i];
 
-		output.SetValue(0, count, pkg.name);
-		output.SetValue(1, count, pkg.version);
-		output.SetValue(2, count, pkg.description);
-		output.SetValue(3, count, pkg.homepage);
-		output.SetValue(4, count, pkg.tap);
+		output.SetValue(0, count, pkg.tap);
+		output.SetValue(1, count, pkg.name);
+		output.SetValue(2, count, pkg.version);
+		output.SetValue(3, count, pkg.description);
+		output.SetValue(4, count, pkg.homepage);
 		output.SetValue(5, count, pkg.license);
 		output.SetValue(6, count, pkg.installed_on_request);
 		output.SetValue(7, count, pkg.installed_as_dependency);
@@ -378,11 +378,11 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 	for (idx_t i = local_state.batch_index; i < data.packages.size() && count < STANDARD_VECTOR_SIZE; i++) {
 		auto &pkg = data.packages[i];
 
-		output.SetValue(0, count, pkg.name);
-		output.SetValue(1, count, pkg.version);
-		output.SetValue(2, count, pkg.description);
-		output.SetValue(3, count, pkg.homepage);
-		output.SetValue(4, count, pkg.tap);
+		output.SetValue(0, count, pkg.tap);
+		output.SetValue(1, count, pkg.name);
+		output.SetValue(2, count, pkg.version);
+		output.SetValue(3, count, pkg.description);
+		output.SetValue(4, count, pkg.homepage);
 		output.SetValue(5, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
 
 		count++;
