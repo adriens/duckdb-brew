@@ -167,6 +167,11 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 	return packages;
 }
 
+struct BrewPackagesBindData : public TableFunctionData {
+	vector<BrewPackage> packages;
+	string filter_type;
+};
+
 struct BrewLocalState : public LocalTableFunctionState {
 	idx_t batch_index = 0;
 };
