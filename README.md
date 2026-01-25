@@ -4,7 +4,7 @@ This repository is based on https://github.com/duckdb/extension-template, check 
 
 ---
 
-This extension, Brew, allow you to ... <extension_goal>.
+This extension, `brew` is useful to query **locally installed** (making hence `brew` a prerequisite) information about Homebrew packages, formulas and casks.
 
 
 ## Building
