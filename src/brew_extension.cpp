@@ -130,18 +130,18 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 					pkg.homepage = GetStringValue(formula, "homepage");
 					pkg.tap = GetStringValue(formula, "tap");
 					pkg.license = GetStringValue(formula, "license");
-					
+
 					// Status flags
 					pkg.outdated = GetBoolValue(formula, "outdated");
 					pkg.pinned = GetBoolValue(formula, "pinned");
 					pkg.deprecated = GetBoolValue(formula, "deprecated");
 					pkg.disabled = GetBoolValue(formula, "disabled");
-					
+
 					// Deprecation/disable info
 					pkg.deprecation_reason = GetStringValue(formula, "deprecation_reason");
 					pkg.disable_reason = GetStringValue(formula, "disable_reason");
 					pkg.caveats = GetStringValue(formula, "caveats");
-					
+
 					// Dependencies and aliases
 					pkg.dependencies = GetArrayAsCommaSeparated(formula, "dependencies");
 					pkg.aliases = GetArrayAsCommaSeparated(formula, "aliases");
@@ -204,14 +204,14 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 					pkg.version = GetStringValue(cask, "version");
 					pkg.tap = GetStringValue(cask, "tap");
 					pkg.installed_time = GetInt64Value(cask, "installed_time");
-					
+
 					// Cask-specific defaults
 					pkg.license = "";
 					pkg.installed_as_dependency = false;
 					pkg.poured_from_bottle = false;
 					pkg.built_as_bottle = false;
 					pkg.dependencies = "";
-					
+
 					// Status flags
 					pkg.outdated = GetBoolValue(cask, "outdated");
 					pkg.pinned = false; // Casks don't get pinned
@@ -301,37 +301,37 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
-	
+
 	names.emplace_back("outdated");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("pinned");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("deprecated");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("disabled");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("poured_from_bottle");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("built_as_bottle");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("dependencies");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("aliases");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("deprecation_reason");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("disable_reason");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("caveats");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
@@ -383,37 +383,37 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
-	
+
 	names.emplace_back("outdated");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("pinned");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("deprecated");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("disabled");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("poured_from_bottle");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("built_as_bottle");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("dependencies");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("aliases");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("deprecation_reason");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("disable_reason");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("caveats");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
@@ -456,37 +456,37 @@ static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunct
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
-	
+
 	names.emplace_back("outdated");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("pinned");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("deprecated");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("disabled");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("poured_from_bottle");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("built_as_bottle");
 	return_types.emplace_back(LogicalType::BOOLEAN);
-	
+
 	names.emplace_back("dependencies");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("aliases");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("deprecation_reason");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("disable_reason");
 	return_types.emplace_back(LogicalType::VARCHAR);
-	
+
 	names.emplace_back("caveats");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
