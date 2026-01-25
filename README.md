@@ -35,15 +35,17 @@ The main binaries that will be built are:
 ## Running the extension
 To run the extension code, simply start the shell with `./build/release/duckdb`.
 
-Now we can use the features from the extension directly in DuckDB. The template contains a single scalar function `brew()` that takes a string arguments and returns a string:
+Now we can use the features from the extension directly in DuckDB:
+```sql
+select * from brew_casks();
 ```
-D select brew('Jane') as result;
-┌───────────────┐
-│    result     │
-│    varchar    │
-├───────────────┤
-│ Brew Jane 🐥 │
-└───────────────┘
+
+```sql
+select * from brew_packages();
+```
+
+```sql
+select * from brew_formulas();
 ```
 
 ## Running the tests
