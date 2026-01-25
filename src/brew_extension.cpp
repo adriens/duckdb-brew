@@ -42,7 +42,12 @@ struct BrewPackage {
 	string tap;
 	string license;
 	bool installed_as_dependency;
-	string required_by;
+};
+
+// Struct for dependency relationships
+struct BrewDependency {
+	string dependency;
+	string package;
 };
 
 static string GetStringValue(const ComplexJSON &obj, const string &key) {
@@ -168,45 +173,62 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 	return packages;
 }
 
-// Get packages that require a given package
-static string GetRequiredBy(const string &package_name) {
-	try {
-		string command = "brew uses --installed " + package_name + " 2>/dev/null";
-		string output = ExecuteCommand(command);
+// Get all dependency relationships
+static vector<BrewDependency> GetAllDependencies(const vector<BrewPackage> &packages) {
+	vector<BrewDependency> dependencies;
 
-		// Remove trailing newline and replace newlines with commas
-		if (!output.empty() && output.back() == '\n') {
-			output.pop_back();
-		}
-
-		// Replace newlines with comma-space
-		size_t pos = 0;
-		while ((pos = output.find('\n', pos)) != string::npos) {
-			output.replace(pos, 1, ", ");
-			pos += 2;
-		}
-
-		return output;
-	} catch (...) {
-		return "";
-	}
-}
-
-// Populate required_by field for all packages
-static void PopulateRequiredBy(vector<BrewPackage> &packages) {
-	for (auto &pkg : packages) {
+	for (const auto &pkg : packages) {
 		// Only check formulas (casks don't have dependencies in the same way)
-		if (pkg.type == "formula") {
-			pkg.required_by = GetRequiredBy(pkg.name);
-		} else {
-			pkg.required_by = "";
+		if (pkg.type != "formula") {
+			continue;
+		}
+
+		try {
+			string command = "brew uses --installed " + pkg.name + " 2>/dev/null";
+			string output = ExecuteCommand(command);
+
+			// Parse each line as a package that depends on pkg.name
+			string line;
+			size_t start = 0;
+			size_t end = output.find('\n');
+
+			while (end != string::npos) {
+				line = output.substr(start, end - start);
+				if (!line.empty()) {
+					BrewDependency dep;
+					dep.dependency = pkg.name;
+					dep.package = line;
+					dependencies.push_back(dep);
+				}
+				start = end + 1;
+				end = output.find('\n', start);
+			}
+
+			// Handle last line if no trailing newline
+			if (start < output.size()) {
+				line = output.substr(start);
+				if (!line.empty()) {
+					BrewDependency dep;
+					dep.dependency = pkg.name;
+					dep.package = line;
+					dependencies.push_back(dep);
+				}
+			}
+		} catch (...) {
+			// Skip on error
 		}
 	}
+
+	return dependencies;
 }
 
 struct BrewPackagesBindData : public TableFunctionData {
 	vector<BrewPackage> packages;
 	string filter_type;
+};
+
+struct BrewDepsBindData : public TableFunctionData {
+	vector<BrewDependency> dependencies;
 };
 
 struct BrewLocalState : public LocalTableFunctionState {
@@ -233,9 +255,6 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 	}
 
 	result->packages = ParseBrewJSON(brew_output);
-
-	// Populate required_by field for all packages
-	PopulateRequiredBy(result->packages);
 
 	names.emplace_back("tap");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -267,9 +286,6 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
 
-	names.emplace_back("required_by");
-	return_types.emplace_back(LogicalType::VARCHAR);
-
 	return std::move(result);
 }
 
@@ -291,9 +307,6 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 			result->packages.push_back(pkg);
 		}
 	}
-
-	// Populate required_by field for formulas
-	PopulateRequiredBy(result->packages);
 
 	names.emplace_back("tap");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -321,9 +334,6 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
-
-	names.emplace_back("required_by");
-	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return std::move(result);
 }
@@ -386,7 +396,6 @@ static void BrewPackagesFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(7, count, pkg.installed_on_request);
 		output.SetValue(8, count, pkg.installed_as_dependency);
 		output.SetValue(9, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
-		output.SetValue(10, count, pkg.required_by);
 
 		count++;
 	}
@@ -412,7 +421,6 @@ static void BrewFormulasFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(6, count, pkg.installed_on_request);
 		output.SetValue(7, count, pkg.installed_as_dependency);
 		output.SetValue(8, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
-		output.SetValue(9, count, pkg.required_by);
 
 		count++;
 	}
@@ -443,6 +451,47 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 	output.SetCardinality(count);
 }
 
+static unique_ptr<FunctionData> BrewDepsBind(ClientContext &context, TableFunctionBindInput &input,
+                                             vector<LogicalType> &return_types, vector<string> &names) {
+	auto result = make_uniq<BrewDepsBindData>();
+
+	string brew_output;
+	try {
+		brew_output = ExecuteCommand("brew info --json=v2 --installed 2>/dev/null");
+	} catch (IOException &e) {
+		throw IOException("Failed to execute brew command. Is Homebrew installed?");
+	}
+
+	auto packages = ParseBrewJSON(brew_output);
+	result->dependencies = GetAllDependencies(packages);
+
+	names.emplace_back("dependency");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("package");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	return std::move(result);
+}
+
+static void BrewDepsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = data_p.bind_data->CastNoConst<BrewDepsBindData>();
+	auto &local_state = data_p.local_state->Cast<BrewLocalState>();
+	idx_t count = 0;
+
+	for (idx_t i = local_state.batch_index; i < data.dependencies.size() && count < STANDARD_VECTOR_SIZE; i++) {
+		auto &dep = data.dependencies[i];
+
+		output.SetValue(0, count, dep.dependency);
+		output.SetValue(1, count, dep.package);
+
+		count++;
+	}
+
+	local_state.batch_index += count;
+	output.SetCardinality(count);
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction brew_packages("brew_packages", {}, BrewPackagesFunction, BrewPackagesBind);
 	brew_packages.init_local = BrewInitLocal;
@@ -455,6 +504,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction brew_casks("brew_casks", {}, BrewCasksFunction, BrewCasksBind);
 	brew_casks.init_local = BrewInitLocal;
 	loader.RegisterFunction(brew_casks);
+
+	TableFunction brew_deps("brew_deps", {}, BrewDepsFunction, BrewDepsBind);
+	brew_deps.init_local = BrewInitLocal;
+	loader.RegisterFunction(brew_deps);
 }
 
 void BrewExtension::Load(ExtensionLoader &loader) {
