@@ -21,17 +21,23 @@ Note: VCPKG is only required for extensions that want to rely on it for dependen
 Now to build the extension, run:
 ```sh
 GEN=ninja make
+make
 ```
-Or without ninja:
+
+Or just:
+
 ```sh
 make
 ```
+
 The main binaries that will be built are:
+
 ```sh
 ./build/release/duckdb
 ./build/release/test/unittest
 ./build/release/extension/brew/brew.duckdb_extension
 ```
+
 - `duckdb` is the binary for the duckdb shell with the extension code automatically loaded.
 - `unittest` is the test runner of duckdb. Again, the extension is already linked into the binary.
 - `brew.duckdb_extension` is the loadable binary as it would be distributed.
