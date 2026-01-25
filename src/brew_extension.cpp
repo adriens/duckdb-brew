@@ -42,6 +42,7 @@ struct BrewPackage {
 	string tap;
 	string license;
 	bool installed_as_dependency;
+	string required_by;
 };
 
 static string GetStringValue(const ComplexJSON &obj, const string &key) {
@@ -167,6 +168,42 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 	return packages;
 }
 
+// Get packages that require a given package
+static string GetRequiredBy(const string &package_name) {
+	try {
+		string command = "brew uses --installed " + package_name + " 2>/dev/null";
+		string output = ExecuteCommand(command);
+
+		// Remove trailing newline and replace newlines with commas
+		if (!output.empty() && output.back() == '\n') {
+			output.pop_back();
+		}
+
+		// Replace newlines with comma-space
+		size_t pos = 0;
+		while ((pos = output.find('\n', pos)) != string::npos) {
+			output.replace(pos, 1, ", ");
+			pos += 2;
+		}
+
+		return output;
+	} catch (...) {
+		return "";
+	}
+}
+
+// Populate required_by field for all packages
+static void PopulateRequiredBy(vector<BrewPackage> &packages) {
+	for (auto &pkg : packages) {
+		// Only check formulas (casks don't have dependencies in the same way)
+		if (pkg.type == "formula") {
+			pkg.required_by = GetRequiredBy(pkg.name);
+		} else {
+			pkg.required_by = "";
+		}
+	}
+}
+
 struct BrewPackagesBindData : public TableFunctionData {
 	vector<BrewPackage> packages;
 	string filter_type;
@@ -196,6 +233,9 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 	}
 
 	result->packages = ParseBrewJSON(brew_output);
+
+	// Populate required_by field for all packages
+	PopulateRequiredBy(result->packages);
 
 	names.emplace_back("tap");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -227,6 +267,9 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
 
+	names.emplace_back("required_by");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
 	return std::move(result);
 }
 
@@ -248,6 +291,9 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 			result->packages.push_back(pkg);
 		}
 	}
+
+	// Populate required_by field for formulas
+	PopulateRequiredBy(result->packages);
 
 	names.emplace_back("tap");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -275,6 +321,9 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 
 	names.emplace_back("installed_time");
 	return_types.emplace_back(LogicalType::TIMESTAMP);
+
+	names.emplace_back("required_by");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return std::move(result);
 }
@@ -337,6 +386,7 @@ static void BrewPackagesFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(7, count, pkg.installed_on_request);
 		output.SetValue(8, count, pkg.installed_as_dependency);
 		output.SetValue(9, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
+		output.SetValue(10, count, pkg.required_by);
 
 		count++;
 	}
@@ -362,6 +412,7 @@ static void BrewFormulasFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(6, count, pkg.installed_on_request);
 		output.SetValue(7, count, pkg.installed_as_dependency);
 		output.SetValue(8, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
+		output.SetValue(9, count, pkg.required_by);
 
 		count++;
 	}
