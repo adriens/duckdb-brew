@@ -38,6 +38,10 @@ struct BrewPackage {
 	string homepage;
 	string type;
 	bool installed_on_request;
+	int64_t installed_time;
+	string tap;
+	string license;
+	bool installed_as_dependency;
 };
 
 static string GetStringValue(const ComplexJSON &obj, const string &key) {
@@ -54,6 +58,15 @@ static bool GetBoolValue(const ComplexJSON &obj, const string &key) {
 		return val == "true";
 	} catch (...) {
 		return false;
+	}
+}
+
+static int64_t GetInt64Value(const ComplexJSON &obj, const string &key) {
+	try {
+		string val = obj.GetValue(key);
+		return std::stoll(val);
+	} catch (...) {
+		return 0;
 	}
 }
 
@@ -76,6 +89,8 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 					pkg.name = GetStringValue(formula, "name");
 					pkg.description = GetStringValue(formula, "desc");
 					pkg.homepage = GetStringValue(formula, "homepage");
+					pkg.tap = GetStringValue(formula, "tap");
+					pkg.license = GetStringValue(formula, "license");
 
 					// Get version and installed_on_request from installed array
 					try {
@@ -84,13 +99,19 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 							auto &inst_info = installed.GetArrayElement(0);
 							pkg.version = GetStringValue(inst_info, "version");
 							pkg.installed_on_request = GetBoolValue(inst_info, "installed_on_request");
+							pkg.installed_time = GetInt64Value(inst_info, "time");
+							pkg.installed_as_dependency = GetBoolValue(inst_info, "installed_as_dependency");
 						} catch (...) {
 							pkg.version = "";
 							pkg.installed_on_request = false;
+							pkg.installed_time = 0;
+							pkg.installed_as_dependency = false;
 						}
 					} catch (...) {
 						pkg.version = "";
 						pkg.installed_on_request = false;
+						pkg.installed_time = 0;
+						pkg.installed_as_dependency = false;
 					}
 
 					if (!pkg.name.empty()) {
@@ -121,6 +142,10 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 					pkg.description = GetStringValue(cask, "desc");
 					pkg.homepage = GetStringValue(cask, "homepage");
 					pkg.version = GetStringValue(cask, "version");
+					pkg.tap = GetStringValue(cask, "tap");
+					pkg.installed_time = GetInt64Value(cask, "installed_time");
+					pkg.license = "";                    // Casks don't typically have license in the JSON
+					pkg.installed_as_dependency = false; // Casks are always installed on request
 
 					if (!pkg.name.empty()) {
 						packages.push_back(pkg);
@@ -187,8 +212,20 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 	names.emplace_back("homepage");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("tap");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("license");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
 	names.emplace_back("installed_on_request");
 	return_types.emplace_back(LogicalType::BOOLEAN);
+
+	names.emplace_back("installed_as_dependency");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+
+	names.emplace_back("installed_time");
+	return_types.emplace_back(LogicalType::TIMESTAMP);
 
 	return std::move(result);
 }
@@ -224,8 +261,20 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 	names.emplace_back("homepage");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("tap");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("license");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
 	names.emplace_back("installed_on_request");
 	return_types.emplace_back(LogicalType::BOOLEAN);
+
+	names.emplace_back("installed_as_dependency");
+	return_types.emplace_back(LogicalType::BOOLEAN);
+
+	names.emplace_back("installed_time");
+	return_types.emplace_back(LogicalType::TIMESTAMP);
 
 	return std::move(result);
 }
@@ -261,6 +310,12 @@ static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunct
 	names.emplace_back("homepage");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("tap");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("installed_time");
+	return_types.emplace_back(LogicalType::TIMESTAMP);
+
 	return std::move(result);
 }
 
@@ -277,7 +332,11 @@ static void BrewPackagesFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(2, count, pkg.type);
 		output.SetValue(3, count, pkg.description);
 		output.SetValue(4, count, pkg.homepage);
-		output.SetValue(5, count, pkg.installed_on_request);
+		output.SetValue(5, count, pkg.tap);
+		output.SetValue(6, count, pkg.license);
+		output.SetValue(7, count, pkg.installed_on_request);
+		output.SetValue(8, count, pkg.installed_as_dependency);
+		output.SetValue(9, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
 
 		count++;
 	}
@@ -298,7 +357,11 @@ static void BrewFormulasFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(1, count, pkg.version);
 		output.SetValue(2, count, pkg.description);
 		output.SetValue(3, count, pkg.homepage);
-		output.SetValue(4, count, pkg.installed_on_request);
+		output.SetValue(4, count, pkg.tap);
+		output.SetValue(5, count, pkg.license);
+		output.SetValue(6, count, pkg.installed_on_request);
+		output.SetValue(7, count, pkg.installed_as_dependency);
+		output.SetValue(8, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
 
 		count++;
 	}
@@ -319,6 +382,8 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 		output.SetValue(1, count, pkg.version);
 		output.SetValue(2, count, pkg.description);
 		output.SetValue(3, count, pkg.homepage);
+		output.SetValue(4, count, pkg.tap);
+		output.SetValue(5, count, Value::TIMESTAMP(Timestamp::FromEpochSeconds(pkg.installed_time)));
 
 		count++;
 	}

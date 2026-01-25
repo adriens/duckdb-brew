@@ -20,7 +20,7 @@ true
 # Test that we have the expected columns structure (returns 0 or 1 row)
 query I
 SELECT COUNT(*) >= 0 FROM (
-    SELECT name, version, type, description, homepage, installed_on_request 
+    SELECT name, version, type, description, homepage, tap, license, installed_on_request, installed_as_dependency, installed_time 
     FROM brew_packages() 
     LIMIT 1
 );
