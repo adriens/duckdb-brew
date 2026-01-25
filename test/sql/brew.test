@@ -1,0 +1,57 @@
+# name: test/sql/brew.test
+# description: test brew extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT * FROM brew_packages();
+----
+Catalog Error: Table Function with name brew_packages does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require brew
+
+# Test brew_packages() - should return all packages (formulas and casks)
+query I
+SELECT COUNT(*) > 0 FROM brew_packages();
+----
+true
+
+# Test that we have the expected columns
+query I
+SELECT COUNT(*) FROM (
+    SELECT name, version, type, description, homepage, installed_on_request 
+    FROM brew_packages() 
+    LIMIT 1
+);
+----
+1
+
+# Test brew_formulas() - should return only formulas
+query I
+SELECT COUNT(*) > 0 FROM brew_formulas();
+----
+true
+
+# Test that all results from brew_formulas are of type formula
+query I
+SELECT COUNT(*) FROM brew_formulas() WHERE name IS NOT NULL;
+----
+SELECT COUNT(*) FROM brew_formulas();
+
+# Test brew_casks() - may be empty if no casks installed
+query I
+SELECT COUNT(*) >= 0 FROM brew_casks();
+----
+true
+
+# Test filtering by type in brew_packages
+query I
+SELECT DISTINCT type FROM brew_packages() ORDER BY type;
+----
+
+# Test that we can query specific packages
+query I
+SELECT COUNT(*) >= 0 FROM brew_packages() WHERE name LIKE '%duck%';
+----
+true

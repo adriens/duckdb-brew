@@ -1,0 +1,401 @@
+#define DUCKDB_EXTENSION_MAIN
+
+#include "brew_extension.hpp"
+#include "duckdb.hpp"
+#include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/function/table_function.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
+#include <cstdio>
+#include <memory>
+#include <array>
+
+namespace duckdb {
+
+// Helper function to execute a shell command and capture output
+static string ExecuteCommand(const string &command) {
+std::array<char, 128> buffer;
+std::string result;
+
+std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+if (!pipe) {
+throw IOException("Failed to execute command: " + command);
+}
+
+while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+result += buffer.data();
+}
+
+return result;
+}
+
+// Simple JSON parser for brew output
+struct BrewPackage {
+string name;
+string version;
+string description;
+string homepage;
+string type;
+bool installed_on_request;
+};
+
+static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
+vector<BrewPackage> packages;
+
+size_t formulae_pos = json_output.find("\"formulae\":");
+size_t casks_pos = json_output.find("\"casks\":");
+
+// Parse formulas
+if (formulae_pos != string::npos) {
+size_t start = json_output.find("[", formulae_pos);
+size_t end = json_output.find("]", start);
+if (start != string::npos && end != string::npos) {
+string formulae_section = json_output.substr(start, end - start);
+
+size_t pos = 0;
+while ((pos = formulae_section.find("\"name\":", pos)) != string::npos) {
+BrewPackage pkg;
+pkg.type = "formula";
+pkg.installed_on_request = false;
+
+// Extract name
+size_t name_start = formulae_section.find("\"", pos + 7);
+size_t name_end = formulae_section.find("\"", name_start + 1);
+if (name_start != string::npos && name_end != string::npos) {
+pkg.name = formulae_section.substr(name_start + 1, name_end - name_start - 1);
+}
+
+// Extract description
+size_t desc_pos = formulae_section.find("\"desc\":", pos);
+if (desc_pos != string::npos && desc_pos < formulae_section.find("\"name\":", pos + 10)) {
+size_t desc_start = formulae_section.find("\"", desc_pos + 7);
+size_t desc_end = formulae_section.find("\"", desc_start + 1);
+if (desc_start != string::npos && desc_end != string::npos) {
+pkg.description = formulae_section.substr(desc_start + 1, desc_end - desc_start - 1);
+}
+}
+
+// Extract homepage
+size_t home_pos = formulae_section.find("\"homepage\":", pos);
+if (home_pos != string::npos && home_pos < formulae_section.find("\"name\":", pos + 10)) {
+size_t home_start = formulae_section.find("\"", home_pos + 11);
+size_t home_end = formulae_section.find("\"", home_start + 1);
+if (home_start != string::npos && home_end != string::npos) {
+pkg.homepage = formulae_section.substr(home_start + 1, home_end - home_start - 1);
+}
+}
+
+// Extract version from installed array
+size_t installed_pos = formulae_section.find("\"installed\":", pos);
+if (installed_pos != string::npos && installed_pos < formulae_section.find("\"name\":", pos + 10)) {
+size_t ver_pos = formulae_section.find("\"version\":", installed_pos);
+if (ver_pos != string::npos) {
+size_t ver_start = formulae_section.find("\"", ver_pos + 10);
+size_t ver_end = formulae_section.find("\"", ver_start + 1);
+if (ver_start != string::npos && ver_end != string::npos) {
+pkg.version = formulae_section.substr(ver_start + 1, ver_end - ver_start - 1);
+}
+}
+
+size_t req_pos = formulae_section.find("\"installed_on_request\":", installed_pos);
+if (req_pos != string::npos && req_pos < formulae_section.find("\"installed\":", installed_pos + 15)) {
+size_t req_val = formulae_section.find("true", req_pos);
+pkg.installed_on_request = (req_val != string::npos && req_val < req_pos + 30);
+}
+}
+
+if (!pkg.name.empty()) {
+packages.push_back(pkg);
+}
+
+pos = name_end;
+}
+}
+}
+
+// Parse casks
+if (casks_pos != string::npos) {
+size_t start = json_output.find("[", casks_pos);
+size_t end = json_output.rfind("]");
+if (start != string::npos && end != string::npos) {
+string casks_section = json_output.substr(start, end - start);
+
+size_t pos = 0;
+while ((pos = casks_section.find("\"token\":", pos)) != string::npos) {
+BrewPackage pkg;
+pkg.type = "cask";
+pkg.installed_on_request = true;
+
+// Extract token
+size_t name_start = casks_section.find("\"", pos + 8);
+size_t name_end = casks_section.find("\"", name_start + 1);
+if (name_start != string::npos && name_end != string::npos) {
+pkg.name = casks_section.substr(name_start + 1, name_end - name_start - 1);
+}
+
+// Extract description
+size_t desc_pos = casks_section.find("\"desc\":", pos);
+if (desc_pos != string::npos && desc_pos < casks_section.find("\"token\":", pos + 10)) {
+size_t desc_start = casks_section.find("\"", desc_pos + 7);
+size_t desc_end = casks_section.find("\"", desc_start + 1);
+if (desc_start != string::npos && desc_end != string::npos) {
+pkg.description = casks_section.substr(desc_start + 1, desc_end - desc_start - 1);
+}
+}
+
+// Extract homepage
+size_t home_pos = casks_section.find("\"homepage\":", pos);
+if (home_pos != string::npos && home_pos < casks_section.find("\"token\":", pos + 10)) {
+size_t home_start = casks_section.find("\"", home_pos + 11);
+size_t home_end = casks_section.find("\"", home_start + 1);
+if (home_start != string::npos && home_end != string::npos) {
+pkg.homepage = casks_section.substr(home_start + 1, home_end - home_start - 1);
+}
+}
+
+// Extract version
+size_t ver_pos = casks_section.find("\"version\":", pos);
+if (ver_pos != string::npos && ver_pos < casks_section.find("\"token\":", pos + 10)) {
+size_t ver_start = casks_section.find("\"", ver_pos + 10);
+size_t ver_end = casks_section.find("\"", ver_start + 1);
+if (ver_start != string::npos && ver_end != string::npos) {
+pkg.version = casks_section.substr(ver_start + 1, ver_end - ver_start - 1);
+}
+}
+
+if (!pkg.name.empty()) {
+packages.push_back(pkg);
+}
+
+pos = name_end;
+}
+}
+}
+
+return packages;
+}
+
+struct BrewPackagesBindData : public TableFunctionData {
+vector<BrewPackage> packages;
+string filter_type;
+};
+
+struct BrewLocalState : public LocalTableFunctionState {
+idx_t batch_index = 0;
+};
+
+static unique_ptr<LocalTableFunctionState> BrewInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
+                                                           GlobalTableFunctionState *global_state) {
+auto result = make_uniq<BrewLocalState>();
+result->batch_index = 0;
+return std::move(result);
+}
+
+static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFunctionBindInput &input,
+                                                  vector<LogicalType> &return_types, vector<string> &names) {
+auto result = make_uniq<BrewPackagesBindData>();
+result->filter_type = "all";
+
+string brew_output;
+try {
+brew_output = ExecuteCommand("brew info --json=v2 --installed 2>/dev/null");
+} catch (IOException &e) {
+throw IOException("Failed to execute brew command. Is Homebrew installed?");
+}
+
+result->packages = ParseBrewJSON(brew_output);
+
+names.emplace_back("name");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("version");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("type");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("description");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("homepage");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("installed_on_request");
+return_types.emplace_back(LogicalType::BOOLEAN);
+
+return std::move(result);
+}
+
+static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFunctionBindInput &input,
+                                                   vector<LogicalType> &return_types, vector<string> &names) {
+auto result = make_uniq<BrewPackagesBindData>();
+result->filter_type = "formula";
+
+string brew_output;
+try {
+brew_output = ExecuteCommand("brew info --json=v2 --installed 2>/dev/null");
+} catch (IOException &e) {
+throw IOException("Failed to execute brew command. Is Homebrew installed?");
+}
+
+auto all_packages = ParseBrewJSON(brew_output);
+for (auto &pkg : all_packages) {
+if (pkg.type == "formula") {
+result->packages.push_back(pkg);
+}
+}
+
+names.emplace_back("name");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("version");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("description");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("homepage");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("installed_on_request");
+return_types.emplace_back(LogicalType::BOOLEAN);
+
+return std::move(result);
+}
+
+static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunctionBindInput &input,
+                                                vector<LogicalType> &return_types, vector<string> &names) {
+auto result = make_uniq<BrewPackagesBindData>();
+result->filter_type = "cask";
+
+string brew_output;
+try {
+brew_output = ExecuteCommand("brew info --json=v2 --installed 2>/dev/null");
+} catch (IOException &e) {
+throw IOException("Failed to execute brew command. Is Homebrew installed?");
+}
+
+auto all_packages = ParseBrewJSON(brew_output);
+for (auto &pkg : all_packages) {
+if (pkg.type == "cask") {
+result->packages.push_back(pkg);
+}
+}
+
+names.emplace_back("name");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("version");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("description");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+names.emplace_back("homepage");
+return_types.emplace_back(LogicalType::VARCHAR);
+
+return std::move(result);
+}
+
+static void BrewPackagesFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+auto &data = data_p.bind_data->CastNoConst<BrewPackagesBindData>();
+auto &local_state = data_p.local_state->Cast<BrewLocalState>();
+idx_t count = 0;
+
+for (idx_t i = local_state.batch_index; i < data.packages.size() && count < STANDARD_VECTOR_SIZE; i++) {
+auto &pkg = data.packages[i];
+
+output.SetValue(0, count, pkg.name);
+output.SetValue(1, count, pkg.version);
+output.SetValue(2, count, pkg.type);
+output.SetValue(3, count, pkg.description);
+output.SetValue(4, count, pkg.homepage);
+output.SetValue(5, count, pkg.installed_on_request);
+
+count++;
+}
+
+local_state.batch_index += count;
+output.SetCardinality(count);
+}
+
+static void BrewFormulasFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+auto &data = data_p.bind_data->CastNoConst<BrewPackagesBindData>();
+auto &local_state = data_p.local_state->Cast<BrewLocalState>();
+idx_t count = 0;
+
+for (idx_t i = local_state.batch_index; i < data.packages.size() && count < STANDARD_VECTOR_SIZE; i++) {
+auto &pkg = data.packages[i];
+
+output.SetValue(0, count, pkg.name);
+output.SetValue(1, count, pkg.version);
+output.SetValue(2, count, pkg.description);
+output.SetValue(3, count, pkg.homepage);
+output.SetValue(4, count, pkg.installed_on_request);
+
+count++;
+}
+
+local_state.batch_index += count;
+output.SetCardinality(count);
+}
+
+static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+auto &data = data_p.bind_data->CastNoConst<BrewPackagesBindData>();
+auto &local_state = data_p.local_state->Cast<BrewLocalState>();
+idx_t count = 0;
+
+for (idx_t i = local_state.batch_index; i < data.packages.size() && count < STANDARD_VECTOR_SIZE; i++) {
+auto &pkg = data.packages[i];
+
+output.SetValue(0, count, pkg.name);
+output.SetValue(1, count, pkg.version);
+output.SetValue(2, count, pkg.description);
+output.SetValue(3, count, pkg.homepage);
+
+count++;
+}
+
+local_state.batch_index += count;
+output.SetCardinality(count);
+}
+
+static void LoadInternal(ExtensionLoader &loader) {
+TableFunction brew_packages("brew_packages", {}, BrewPackagesFunction, BrewPackagesBind);
+brew_packages.init_local = BrewInitLocal;
+loader.RegisterFunction(brew_packages);
+
+TableFunction brew_formulas("brew_formulas", {}, BrewFormulasFunction, BrewFormulasBind);
+brew_formulas.init_local = BrewInitLocal;
+loader.RegisterFunction(brew_formulas);
+
+TableFunction brew_casks("brew_casks", {}, BrewCasksFunction, BrewCasksBind);
+brew_casks.init_local = BrewInitLocal;
+loader.RegisterFunction(brew_casks);
+}
+
+void BrewExtension::Load(ExtensionLoader &loader) {
+LoadInternal(loader);
+}
+
+std::string BrewExtension::Name() {
+return "brew";
+}
+
+std::string BrewExtension::Version() const {
+#ifdef EXT_VERSION_BREW
+return EXT_VERSION_BREW;
+#else
+return "";
+#endif
+}
+
+} // namespace duckdb
+
+extern "C" {
+
+DUCKDB_CPP_EXTENSION_ENTRY(brew, loader) {
+duckdb::LoadInternal(loader);
+}
+}
