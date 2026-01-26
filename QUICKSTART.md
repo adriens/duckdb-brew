@@ -33,7 +33,8 @@ CREATE OR REPLACE TEMP TABLE brew_packages (
     aliases VARCHAR,
     deprecation_reason VARCHAR,
     disable_reason VARCHAR,
-    caveats VARCHAR
+    caveats VARCHAR,
+    size_bytes BIGINT
 );
 
 -- Populate from the function
@@ -118,6 +119,57 @@ FROM brew_packages
 WHERE installed_time IS NOT NULL
 GROUP BY month
 ORDER BY month DESC;
+```
+
+### Disk Usage Analysis
+
+**What it does:** Shows the largest packages consuming disk space.
+
+**When to use it:** When running low on disk space or auditing storage usage.
+
+**What the results tell you:** Identifies packages you might want to remove to free up space.
+
+```sql
+-- Top 10 largest packages
+SELECT 
+    name, 
+    type,
+    ROUND(size_bytes / 1024 / 1024) as size_mb
+FROM brew_packages
+ORDER BY size_bytes DESC
+LIMIT 10;
+```
+
+**What it does:** Shows total disk usage by package type (formula vs cask).
+
+**When to use it:** Understanding where your disk space is going.
+
+**What the results tell you:** Whether formulas or casks consume more space.
+
+```sql
+-- Total disk usage by package type
+SELECT 
+    type, 
+    ROUND(sum(size_bytes) / 1024.0 / 1024.0 / 1024.0, 1) as total_gb
+FROM brew_packages
+GROUP BY type;
+```
+
+**What it does:** Shows total disk usage by tap/repository.
+
+**When to use it:** Identifying which taps consume the most disk space.
+
+**What the results tell you:** Third-party taps may have larger packages than core.
+
+```sql
+-- Total disk usage by tap
+SELECT 
+    tap, 
+    count(*) as package_count,
+    ROUND(sum(size_bytes) / 1024.0 / 1024.0 / 1024.0, 1) as total_gb
+FROM brew_packages
+GROUP BY tap
+ORDER BY total_gb DESC;
 ```
 
 ## Dependency Analysis
@@ -408,11 +460,12 @@ SELECT
     count(*) as total_packages,
     sum(case when outdated then 1 else 0 end) as outdated,
     sum(case when deprecated then 1 else 0 end) as deprecated,
-    sum(case when installed_as_dependency = false then 1 else 0 end) as explicitly_installed
+    sum(case when installed_as_dependency = false then 1 else 0 end) as explicitly_installed,
+    ROUND(sum(size_bytes) / 1024.0 / 1024.0 / 1024.0, 1) as total_gb
 FROM brew_packages;
 
 -- 2. New packages this month
-SELECT name, installed_time
+SELECT name, installed_time, ROUND(size_bytes / 1024 / 1024) as size_mb
 FROM brew_packages
 WHERE installed_time >= date_trunc('month', now())
 ORDER BY installed_time DESC;
@@ -424,7 +477,14 @@ SELECT name,
         when disabled then 'DISABLED: ' || disable_reason
         when outdated then 'OUTDATED'
         when caveats is not null then 'HAS CAVEATS'
-    end as action_needed
+    end as action_needed,
+    ROUND(size_bytes / 1024 / 1024) as size_mb
 FROM brew_packages
 WHERE deprecated OR disabled OR outdated OR caveats IS NOT NULL;
+
+-- 4. Largest packages (candidates for removal)
+SELECT name, type, ROUND(size_bytes / 1024 / 1024) as size_mb
+FROM brew_packages
+ORDER BY size_bytes DESC
+LIMIT 20;
 ```

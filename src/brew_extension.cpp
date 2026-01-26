@@ -53,6 +53,7 @@ struct BrewPackage {
 	string deprecation_reason;
 	string disable_reason;
 	string caveats;
+	int64_t size_bytes;
 };
 
 static string GetStringValue(const ComplexJSON &obj, const string &key) {
@@ -106,6 +107,34 @@ static string GetArrayAsCommaSeparated(ComplexJSON &obj, const string &key) {
 		return result;
 	} catch (...) {
 		return "";
+	}
+}
+
+static int64_t GetPackageSize(const string &package_name, const string &package_type) {
+	try {
+		string base_path_cmd;
+		if (package_type == "formula") {
+			base_path_cmd = "brew --cellar";
+		} else {
+			base_path_cmd = "brew --caskroom";
+		}
+
+		string command = base_path_cmd + " 2>/dev/null";
+		string base_path = ExecuteCommand(command);
+		StringUtil::Trim(base_path);
+
+		string full_path = base_path + "/" + package_name;
+		string du_command = "du -sb \"" + full_path + "\" 2>/dev/null | awk '{print $1}'";
+		string size_str = ExecuteCommand(du_command);
+		StringUtil::Trim(size_str);
+
+		if (size_str.empty()) {
+			return 0;
+		}
+
+		return std::stoll(size_str);
+	} catch (...) {
+		return 0;
 	}
 }
 
@@ -174,6 +203,9 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 						pkg.built_as_bottle = false;
 					}
 
+					// Calculate package size
+					pkg.size_bytes = GetPackageSize(pkg.name, pkg.type);
+
 					if (!pkg.name.empty()) {
 						packages.push_back(pkg);
 					}
@@ -221,6 +253,9 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 					pkg.disable_reason = GetStringValue(cask, "disable_reason");
 					pkg.caveats = GetStringValue(cask, "caveats");
 					pkg.aliases = GetArrayAsCommaSeparated(cask, "old_tokens");
+
+					// Calculate package size
+					pkg.size_bytes = GetPackageSize(pkg.name, pkg.type);
 
 					if (!pkg.name.empty()) {
 						packages.push_back(pkg);
@@ -335,6 +370,9 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 	names.emplace_back("caveats");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("size_bytes");
+	return_types.emplace_back(LogicalType::BIGINT);
+
 	return std::move(result);
 }
 
@@ -417,6 +455,9 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 	names.emplace_back("caveats");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("size_bytes");
+	return_types.emplace_back(LogicalType::BIGINT);
+
 	return std::move(result);
 }
 
@@ -490,6 +531,9 @@ static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunct
 	names.emplace_back("caveats");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
+	names.emplace_back("size_bytes");
+	return_types.emplace_back(LogicalType::BIGINT);
+
 	return std::move(result);
 }
 
@@ -522,6 +566,7 @@ static void BrewPackagesFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(18, count, pkg.deprecation_reason.empty() ? Value() : Value(pkg.deprecation_reason));
 		output.SetValue(19, count, pkg.disable_reason.empty() ? Value() : Value(pkg.disable_reason));
 		output.SetValue(20, count, pkg.caveats.empty() ? Value() : Value(pkg.caveats));
+		output.SetValue(21, count, pkg.size_bytes);
 
 		count++;
 	}
@@ -558,6 +603,7 @@ static void BrewFormulasFunction(ClientContext &context, TableFunctionInput &dat
 		output.SetValue(17, count, pkg.deprecation_reason.empty() ? Value() : Value(pkg.deprecation_reason));
 		output.SetValue(18, count, pkg.disable_reason.empty() ? Value() : Value(pkg.disable_reason));
 		output.SetValue(19, count, pkg.caveats.empty() ? Value() : Value(pkg.caveats));
+		output.SetValue(20, count, pkg.size_bytes);
 
 		count++;
 	}
@@ -591,6 +637,7 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 		output.SetValue(14, count, pkg.deprecation_reason.empty() ? Value() : Value(pkg.deprecation_reason));
 		output.SetValue(15, count, pkg.disable_reason.empty() ? Value() : Value(pkg.disable_reason));
 		output.SetValue(16, count, pkg.caveats.empty() ? Value() : Value(pkg.caveats));
+		output.SetValue(17, count, pkg.size_bytes);
 
 		count++;
 	}
