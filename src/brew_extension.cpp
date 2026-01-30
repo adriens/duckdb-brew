@@ -697,9 +697,7 @@ static unique_ptr<FunctionData> BrewDependenciesBind(ClientContext &context, Tab
 
 	// Sort by name
 	std::sort(result->dependencies.begin(), result->dependencies.end(),
-	          [](const BrewDependency &a, const BrewDependency &b) {
-		          return a.name < b.name;
-	          });
+	          [](const BrewDependency &a, const BrewDependency &b) { return a.name < b.name; });
 
 	names.emplace_back("name");
 	return_types.emplace_back(LogicalType::VARCHAR);
