@@ -668,7 +668,7 @@ static unique_ptr<FunctionData> BrewDependenciesBind(ClientContext &context, Tab
 	}
 
 	auto all_packages = ParseBrewJSON(brew_output);
-	
+
 	// Process each package and split its dependencies
 	for (auto &pkg : all_packages) {
 		if (!pkg.dependencies.empty()) {
@@ -676,17 +676,17 @@ static unique_ptr<FunctionData> BrewDependenciesBind(ClientContext &context, Tab
 			string deps = pkg.dependencies;
 			size_t start = 0;
 			size_t end = deps.find(", ");
-			
+
 			while (end != string::npos) {
 				BrewDependency dep;
 				dep.name = pkg.name;
 				dep.dependency = deps.substr(start, end - start);
 				result->dependencies.push_back(dep);
-				
+
 				start = end + 2; // Skip ", "
 				end = deps.find(", ", start);
 			}
-			
+
 			// Add the last dependency
 			BrewDependency dep;
 			dep.name = pkg.name;
