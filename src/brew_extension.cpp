@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <memory>
 #include <array>
+#include <algorithm>
 
 namespace duckdb {
 
@@ -284,6 +285,15 @@ struct BrewPackagesBindData : public TableFunctionData {
 
 struct BrewLocalState : public LocalTableFunctionState {
 	idx_t batch_index = 0;
+};
+
+struct BrewDependency {
+	string name;
+	string dependency;
+};
+
+struct BrewDependenciesBindData : public TableFunctionData {
+	vector<BrewDependency> dependencies;
 };
 
 static unique_ptr<LocalTableFunctionState> BrewInitLocal(ExecutionContext &context, TableFunctionInitInput &input,
@@ -646,6 +656,78 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 	output.SetCardinality(count);
 }
 
+static unique_ptr<FunctionData> BrewDependenciesBind(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
+	auto result = make_uniq<BrewDependenciesBindData>();
+
+	string brew_output;
+	try {
+		brew_output = ExecuteCommand("brew info --json=v2 --installed 2>/dev/null");
+	} catch (IOException &e) {
+		throw IOException("Failed to execute brew command. Is Homebrew installed?");
+	}
+
+	auto all_packages = ParseBrewJSON(brew_output);
+	
+	// Process each package and split its dependencies
+	for (auto &pkg : all_packages) {
+		if (!pkg.dependencies.empty()) {
+			// Split dependencies by ", "
+			string deps = pkg.dependencies;
+			size_t start = 0;
+			size_t end = deps.find(", ");
+			
+			while (end != string::npos) {
+				BrewDependency dep;
+				dep.name = pkg.name;
+				dep.dependency = deps.substr(start, end - start);
+				result->dependencies.push_back(dep);
+				
+				start = end + 2; // Skip ", "
+				end = deps.find(", ", start);
+			}
+			
+			// Add the last dependency
+			BrewDependency dep;
+			dep.name = pkg.name;
+			dep.dependency = deps.substr(start);
+			result->dependencies.push_back(dep);
+		}
+	}
+
+	// Sort by name
+	std::sort(result->dependencies.begin(), result->dependencies.end(),
+	          [](const BrewDependency &a, const BrewDependency &b) {
+		          return a.name < b.name;
+	          });
+
+	names.emplace_back("name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("dependency");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	return std::move(result);
+}
+
+static void BrewDependenciesFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = data_p.bind_data->CastNoConst<BrewDependenciesBindData>();
+	auto &local_state = data_p.local_state->Cast<BrewLocalState>();
+	idx_t count = 0;
+
+	for (idx_t i = local_state.batch_index; i < data.dependencies.size() && count < STANDARD_VECTOR_SIZE; i++) {
+		auto &dep = data.dependencies[i];
+
+		output.SetValue(0, count, dep.name);
+		output.SetValue(1, count, dep.dependency);
+
+		count++;
+	}
+
+	local_state.batch_index += count;
+	output.SetCardinality(count);
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction brew_packages("brew_packages", {}, BrewPackagesFunction, BrewPackagesBind);
 	brew_packages.init_local = BrewInitLocal;
@@ -658,6 +740,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction brew_casks("brew_casks", {}, BrewCasksFunction, BrewCasksBind);
 	brew_casks.init_local = BrewInitLocal;
 	loader.RegisterFunction(brew_casks);
+
+	TableFunction brew_dependencies("brew_dependencies", {}, BrewDependenciesFunction, BrewDependenciesBind);
+	brew_dependencies.init_local = BrewInitLocal;
+	loader.RegisterFunction(brew_dependencies);
 }
 
 void BrewExtension::Load(ExtensionLoader &loader) {
