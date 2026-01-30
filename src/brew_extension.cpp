@@ -657,7 +657,7 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 }
 
 static unique_ptr<FunctionData> BrewDependenciesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
+                                                     vector<LogicalType> &return_types, vector<string> &names) {
 	auto result = make_uniq<BrewDependenciesBindData>();
 
 	string brew_output;
