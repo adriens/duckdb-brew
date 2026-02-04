@@ -224,7 +224,7 @@ WITH RECURSIVE dep_chain AS (
     -- Start with the package we're interested in
     SELECT name, dependency, 1 as level
     FROM brew_dependencies
-    WHERE name = 'python@3.12'
+    WHERE name = 'node'
     
     UNION ALL
     
