@@ -729,6 +729,7 @@ static void BrewDependenciesFunction(ClientContext &context, TableFunctionInput 
 struct BrewConfigEntry {
 	string name;
 	string value;
+	string category;
 };
 
 struct BrewConfigBindData : public TableFunctionData {
@@ -741,6 +742,22 @@ static void BrewVersionFunction(DataChunk &args, ExpressionState &state, Vector 
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	auto result_data = ConstantVector::GetData<string_t>(result);
 	result_data[0] = StringVector::AddString(result, version_str);
+}
+
+static string CategorizeConfig(const string &name) {
+	if (StringUtil::StartsWith(name, "HOMEBREW_")) {
+		return "ENVIRONMENT";
+	}
+	if (name == "OS" || name == "CPU" || name == "Kernel" || name == "Host glibc" || name == "Host libstdc++") {
+		return "SYSTEM";
+	}
+	if (name == "ORIGIN" || name == "HEAD" || name == "Last commit" || name == "Branch" || name == "Core tap JSON") {
+		return "META";
+	}
+	if (name.find("/") != string::npos || name == "Git" || name == "Curl" || name == "Clang" || name == "Homebrew Ruby" || name == "glibc" || name == "gcc" || name == "gcc@12" || name == "xorg") {
+		return "BINARY";
+	}
+	return "OTHER";
 }
 
 static unique_ptr<FunctionData> BrewConfigBind(ClientContext &context, TableFunctionBindInput &input,
@@ -762,6 +779,7 @@ static unique_ptr<FunctionData> BrewConfigBind(ClientContext &context, TableFunc
 			StringUtil::Trim(entry.name);
 			StringUtil::Trim(entry.value);
 			if (!entry.name.empty()) {
+				entry.category = CategorizeConfig(entry.name);
 				result->config.push_back(entry);
 			}
 		}
@@ -771,6 +789,9 @@ static unique_ptr<FunctionData> BrewConfigBind(ClientContext &context, TableFunc
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("value");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("category");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return std::move(result);
@@ -786,6 +807,7 @@ static void BrewConfigFunction(ClientContext &context, TableFunctionInput &data_
 
 		output.SetValue(0, count, entry.name);
 		output.SetValue(1, count, entry.value);
+		output.SetValue(2, count, entry.category);
 
 		count++;
 	}
@@ -794,9 +816,38 @@ static void BrewConfigFunction(ClientContext &context, TableFunctionInput &data_
 	output.SetCardinality(count);
 }
 
-struct BrewDoctorBindData : public TableFunctionData {
-	vector<string> warnings;
+struct BrewDoctorEntry {
+	string warning;
+	string severity;
+	string category;
 };
+
+struct BrewDoctorBindData : public TableFunctionData {
+	vector<BrewDoctorEntry> entries;
+};
+
+static string CategorizeDoctor(const string &warning) {
+	string lower = StringUtil::Lower(warning);
+	if (lower.find("path") != string::npos) {
+		return "PATH";
+	}
+	if (lower.find("permission") != string::npos || lower.find("writable") != string::npos) {
+		return "PERMISSIONS";
+	}
+	if (lower.find("outdated") != string::npos || lower.find("update") != string::npos) {
+		return "OUTDATED";
+	}
+	if (lower.find("dependency") != string::npos || lower.find("missing") != string::npos) {
+		return "DEPENDENCIES";
+	}
+	if (lower.find("unlinked") != string::npos) {
+		return "LINKING";
+	}
+	if (lower.find("config") != string::npos || lower.find("script") != string::npos) {
+		return "CONFIGURATION";
+	}
+	return "OTHER";
+}
 
 static unique_ptr<FunctionData> BrewDoctorBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<string> &names) {
@@ -809,21 +860,46 @@ static unique_ptr<FunctionData> BrewDoctorBind(ClientContext &context, TableFunc
 		// Split by "Warning: " to get individual issues
 		auto parts = StringUtil::Split(doctor_output, "Warning: ");
 		for (size_t i = 1; i < parts.size(); i++) {
-			string warning = "Warning: " + parts[i];
-			StringUtil::Trim(warning);
-			if (!warning.empty()) {
-				result->warnings.push_back(warning);
+			BrewDoctorEntry entry;
+			entry.warning = "Warning: " + parts[i];
+			StringUtil::Trim(entry.warning);
+			if (!entry.warning.empty()) {
+				entry.severity = "WARNING";
+				entry.category = CategorizeDoctor(entry.warning);
+				result->entries.push_back(entry);
 			}
 		}
-		// If we couldn't parse any "Warning: " but output is not empty and not "ready",
-		// just return the whole thing
-		if (result->warnings.empty() && !doctor_output.empty()) {
-			StringUtil::Trim(doctor_output);
-			result->warnings.push_back(doctor_output);
+		// Errors are rare but can happen
+		auto error_parts = StringUtil::Split(doctor_output, "Error: ");
+		for (size_t i = 1; i < error_parts.size(); i++) {
+			BrewDoctorEntry entry;
+			entry.warning = "Error: " + error_parts[i];
+			StringUtil::Trim(entry.warning);
+			if (!entry.warning.empty()) {
+				entry.severity = "ERROR";
+				entry.category = CategorizeDoctor(entry.warning);
+				result->entries.push_back(entry);
+			}
+		}
+
+		// If we couldn't parse but output is not empty and not "ready"
+		if (result->entries.empty() && !doctor_output.empty()) {
+			BrewDoctorEntry entry;
+			entry.warning = doctor_output;
+			StringUtil::Trim(entry.warning);
+			entry.severity = "UNKNOWN";
+			entry.category = CategorizeDoctor(entry.warning);
+			result->entries.push_back(entry);
 		}
 	}
 
 	names.emplace_back("warning");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("severity");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("category");
 	return_types.emplace_back(LogicalType::VARCHAR);
 
 	return std::move(result);
@@ -834,8 +910,11 @@ static void BrewDoctorFunction(ClientContext &context, TableFunctionInput &data_
 	auto &local_state = data_p.local_state->Cast<BrewLocalState>();
 	idx_t count = 0;
 
-	for (idx_t i = local_state.batch_index; i < data.warnings.size() && count < STANDARD_VECTOR_SIZE; i++) {
-		output.SetValue(0, count, data.warnings[i]);
+	for (idx_t i = local_state.batch_index; i < data.entries.size() && count < STANDARD_VECTOR_SIZE; i++) {
+		auto &entry = data.entries[i];
+		output.SetValue(0, count, entry.warning);
+		output.SetValue(1, count, entry.severity);
+		output.SetValue(2, count, entry.category);
 		count++;
 	}
 

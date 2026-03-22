@@ -82,16 +82,17 @@ ORDER BY name;
 -- Simple version check
 SELECT brew_version();
 
--- View all configuration
-SELECT * FROM brew_config();
+-- View all configuration with categories
+SELECT name, value, category FROM brew_config();
 
--- Run brew doctor to check system health
+-- View configuration by category
+SELECT * FROM brew_config() WHERE category = 'ENVIRONMENT';
+
+-- Run brew doctor to check system health (categorized)
 SELECT * FROM brew_doctor();
 
--- Query specific paths
-SELECT value 
-FROM brew_config() 
-WHERE name IN ('HOMEBREW_PREFIX', 'HOMEBREW_CELLAR');
+-- Filter doctor results by severity
+SELECT * FROM brew_doctor() WHERE severity = 'WARNING';
 ```
 
 ## Basic Queries
