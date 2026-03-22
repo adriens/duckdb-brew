@@ -47,14 +47,13 @@ To run the extension code, simply start the shell with `./build/release/duckdb`.
 
 Now we can use the features from the extension directly in DuckDB:
 ```sql
+-- Get global brew information
+select brew_version();
+select * from brew_config();
+
+-- Query packages
 select * from brew_casks();
-```
-
-```sql
 select * from brew_packages();
-```
-
-```sql
 select * from brew_formulas();
 ```
 

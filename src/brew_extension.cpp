@@ -726,7 +726,82 @@ static void BrewDependenciesFunction(ClientContext &context, TableFunctionInput 
 	output.SetCardinality(count);
 }
 
+struct BrewConfigEntry {
+	string name;
+	string value;
+};
+
+struct BrewConfigBindData : public TableFunctionData {
+	vector<BrewConfigEntry> config;
+};
+
+static void BrewVersionFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	string version_str = ExecuteCommand("brew --version 2>/dev/null | head -n 1 | cut -d' ' -f2");
+	StringUtil::Trim(version_str);
+	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	auto result_data = ConstantVector::GetData<string_t>(result);
+	result_data[0] = StringVector::AddString(result, version_str);
+}
+
+static unique_ptr<FunctionData> BrewConfigBind(ClientContext &context, TableFunctionBindInput &input,
+                                               vector<LogicalType> &return_types, vector<string> &names) {
+	auto result = make_uniq<BrewConfigBindData>();
+
+	string config_output = ExecuteCommand("brew config 2>/dev/null");
+	auto lines = StringUtil::Split(config_output, "\n");
+
+	for (auto &line : lines) {
+		if (line.empty()) {
+			continue;
+		}
+		auto colon_pos = line.find(": ");
+		if (colon_pos != string::npos) {
+			BrewConfigEntry entry;
+			entry.name = line.substr(0, colon_pos);
+			entry.value = line.substr(colon_pos + 2);
+			StringUtil::Trim(entry.name);
+			StringUtil::Trim(entry.value);
+			if (!entry.name.empty()) {
+				result->config.push_back(entry);
+			}
+		}
+	}
+
+	names.emplace_back("name");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("value");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	return std::move(result);
+}
+
+static void BrewConfigFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = data_p.bind_data->CastNoConst<BrewConfigBindData>();
+	auto &local_state = data_p.local_state->Cast<BrewLocalState>();
+	idx_t count = 0;
+
+	for (idx_t i = local_state.batch_index; i < data.config.size() && count < STANDARD_VECTOR_SIZE; i++) {
+		auto &entry = data.config[i];
+
+		output.SetValue(0, count, entry.name);
+		output.SetValue(1, count, entry.value);
+
+		count++;
+	}
+
+	local_state.batch_index += count;
+	output.SetCardinality(count);
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
+	ScalarFunction brew_version("brew_version", {}, LogicalType::VARCHAR, BrewVersionFunction);
+	loader.RegisterFunction(brew_version);
+
+	TableFunction brew_config("brew_config", {}, BrewConfigFunction, BrewConfigBind);
+	brew_config.init_local = BrewInitLocal;
+	loader.RegisterFunction(brew_config);
+
 	TableFunction brew_packages("brew_packages", {}, BrewPackagesFunction, BrewPackagesBind);
 	brew_packages.init_local = BrewInitLocal;
 	loader.RegisterFunction(brew_packages);

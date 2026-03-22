@@ -1,0 +1,28 @@
+# name: test/sql/brew_info.test
+# description: Test brew_version and brew_config functions
+# group: [brew]
+
+# Before we load the extension, this should fail
+statement error
+SELECT brew_version();
+----
+Catalog Error: Scalar Function with name brew_version does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require brew
+
+query I
+SELECT count(*) > 0 FROM (SELECT brew_version());
+----
+true
+
+query I
+SELECT count(*) > 0 FROM brew_config();
+----
+true
+
+# Check consistency between brew_version() and brew_config('HOMEBREW_VERSION')
+query I
+SELECT (SELECT brew_version()) = (SELECT value FROM brew_config() WHERE name = 'HOMEBREW_VERSION');
+----
+true

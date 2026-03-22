@@ -68,6 +68,29 @@ WHERE dependencies IS NOT NULL
 ORDER BY name;
 ```
 
+## Global Homebrew Information
+
+### Check Version and Configuration
+
+**What it does:** Shows your current Homebrew version and all configuration variables.
+
+**When to use it:** When auditing your Homebrew environment or checking paths.
+
+**What the results tell you:** Confirms your Homebrew version and key settings like `HOMEBREW_PREFIX`.
+
+```sql
+-- Simple version check
+SELECT brew_version();
+
+-- View all configuration
+SELECT * FROM brew_config();
+
+-- Query specific paths
+SELECT value 
+FROM brew_config() 
+WHERE name IN ('HOMEBREW_PREFIX', 'HOMEBREW_CELLAR');
+```
+
 ## Basic Queries
 
 ### Package Distribution by Tap
