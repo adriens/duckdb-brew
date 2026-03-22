@@ -754,7 +754,8 @@ static string CategorizeConfig(const string &name) {
 	if (name == "ORIGIN" || name == "HEAD" || name == "Last commit" || name == "Branch" || name == "Core tap JSON") {
 		return "META";
 	}
-	if (name.find("/") != string::npos || name == "Git" || name == "Curl" || name == "Clang" || name == "Homebrew Ruby" || name == "glibc" || name == "gcc" || name == "gcc@12" || name == "xorg") {
+	if (name.find("/") != string::npos || name == "Git" || name == "Curl" || name == "Clang" ||
+	    name == "Homebrew Ruby" || name == "glibc" || name == "gcc" || name == "gcc@12" || name == "xorg") {
 		return "BINARY";
 	}
 	return "OTHER";
@@ -855,7 +856,7 @@ static unique_ptr<FunctionData> BrewDoctorBind(ClientContext &context, TableFunc
 
 	// brew doctor often returns non-zero if there are warnings, and outputs to stderr
 	string doctor_output = ExecuteCommand("brew doctor 2>&1 || true");
-	
+
 	if (doctor_output.find("Your system is ready to brew") == string::npos) {
 		// Split by "Warning: " to get individual issues
 		auto parts = StringUtil::Split(doctor_output, "Warning: ");

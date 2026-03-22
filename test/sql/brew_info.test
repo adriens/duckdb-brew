@@ -1,6 +1,6 @@
 # name: test/sql/brew_info.test
 # description: Test brew_version and brew_config functions
-# group: [brew]
+# group: [sql]
 
 # Before we load the extension, this should fail
 statement error
