@@ -85,6 +85,9 @@ SELECT brew_version();
 -- View all configuration
 SELECT * FROM brew_config();
 
+-- Run brew doctor to check system health
+SELECT * FROM brew_doctor();
+
 -- Query specific paths
 SELECT value 
 FROM brew_config() 

@@ -50,6 +50,7 @@ Now we can use the features from the extension directly in DuckDB:
 -- Get global brew information
 select brew_version();
 select * from brew_config();
+select * from brew_doctor();
 
 -- Query packages
 select * from brew_casks();

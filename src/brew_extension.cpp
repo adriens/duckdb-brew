@@ -794,6 +794,57 @@ static void BrewConfigFunction(ClientContext &context, TableFunctionInput &data_
 	output.SetCardinality(count);
 }
 
+struct BrewDoctorBindData : public TableFunctionData {
+	vector<string> warnings;
+};
+
+static unique_ptr<FunctionData> BrewDoctorBind(ClientContext &context, TableFunctionBindInput &input,
+                                               vector<LogicalType> &return_types, vector<string> &names) {
+	auto result = make_uniq<BrewDoctorBindData>();
+
+	// brew doctor often returns non-zero if there are warnings, and outputs to stderr
+	string doctor_output = ExecuteCommand("brew doctor 2>&1 || true");
+	
+	if (doctor_output.find("Your system is ready to brew") != string::npos) {
+		result->warnings.push_back("Your system is ready to brew.");
+	} else {
+		// Split by "Warning: " to get individual issues
+		auto parts = StringUtil::Split(doctor_output, "Warning: ");
+		for (size_t i = 1; i < parts.size(); i++) {
+			string warning = "Warning: " + parts[i];
+			StringUtil::Trim(warning);
+			if (!warning.empty()) {
+				result->warnings.push_back(warning);
+			}
+		}
+		// If we couldn't parse any "Warning: " but output is not empty and not "ready",
+		// just return the whole thing
+		if (result->warnings.empty() && !doctor_output.empty()) {
+			StringUtil::Trim(doctor_output);
+			result->warnings.push_back(doctor_output);
+		}
+	}
+
+	names.emplace_back("warning");
+	return_types.emplace_back(LogicalType::VARCHAR);
+
+	return std::move(result);
+}
+
+static void BrewDoctorFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = data_p.bind_data->CastNoConst<BrewDoctorBindData>();
+	auto &local_state = data_p.local_state->Cast<BrewLocalState>();
+	idx_t count = 0;
+
+	for (idx_t i = local_state.batch_index; i < data.warnings.size() && count < STANDARD_VECTOR_SIZE; i++) {
+		output.SetValue(0, count, data.warnings[i]);
+		count++;
+	}
+
+	local_state.batch_index += count;
+	output.SetCardinality(count);
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
 	ScalarFunction brew_version("brew_version", {}, LogicalType::VARCHAR, BrewVersionFunction);
 	loader.RegisterFunction(brew_version);
@@ -801,6 +852,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	TableFunction brew_config("brew_config", {}, BrewConfigFunction, BrewConfigBind);
 	brew_config.init_local = BrewInitLocal;
 	loader.RegisterFunction(brew_config);
+
+	TableFunction brew_doctor("brew_doctor", {}, BrewDoctorFunction, BrewDoctorBind);
+	brew_doctor.init_local = BrewInitLocal;
+	loader.RegisterFunction(brew_doctor);
 
 	TableFunction brew_packages("brew_packages", {}, BrewPackagesFunction, BrewPackagesBind);
 	brew_packages.init_local = BrewInitLocal;
