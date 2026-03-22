@@ -49,8 +49,12 @@ Now we can use the features from the extension directly in DuckDB:
 ```sql
 -- Get global brew information
 select brew_version();
-select * from brew_config();
-select * from brew_doctor();
+
+-- View configuration by category
+select name, value from brew_config() where category = 'ENVIRONMENT';
+
+-- Check for system warnings
+select warning from brew_doctor() where severity = 'WARNING';
 
 -- Query packages
 select * from brew_casks();
