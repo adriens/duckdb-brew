@@ -28,6 +28,11 @@ SELECT (SELECT brew_version()) = (SELECT value FROM brew_config() WHERE name = '
 true
 
 query I
-SELECT count(*) > 0 FROM brew_doctor();
+SELECT count(*) >= 0 FROM brew_doctor();
 ----
 true
+
+# If the system is ready, this should be empty
+query I
+SELECT * FROM brew_doctor() WHERE warning = 'Your system is ready to brew.';
+----

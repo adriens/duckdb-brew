@@ -805,9 +805,7 @@ static unique_ptr<FunctionData> BrewDoctorBind(ClientContext &context, TableFunc
 	// brew doctor often returns non-zero if there are warnings, and outputs to stderr
 	string doctor_output = ExecuteCommand("brew doctor 2>&1 || true");
 	
-	if (doctor_output.find("Your system is ready to brew") != string::npos) {
-		result->warnings.push_back("Your system is ready to brew.");
-	} else {
+	if (doctor_output.find("Your system is ready to brew") == string::npos) {
 		// Split by "Warning: " to get individual issues
 		auto parts = StringUtil::Split(doctor_output, "Warning: ");
 		for (size_t i = 1; i < parts.size(); i++) {
