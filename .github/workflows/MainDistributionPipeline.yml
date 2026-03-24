@@ -19,8 +19,8 @@ jobs:
       duckdb_version: v1.5.0
       ci_tools_version: v1.5.0
       extension_name: brew
-      # Homebrew is only available on macOS and Linux, exclude Windows
-      exclude_archs: 'windows_amd64;windows_amd64_rtools'
+      # Homebrew is only available on macOS and Linux, exclude Windows and WASM
+      exclude_archs: 'windows_amd64;windows_amd64_rtools;windows_arm64;wasm_mvp;wasm_eh;wasm_threads'
 
   code-quality-check:
     name: Code Quality Check
