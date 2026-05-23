@@ -1,0 +1,109 @@
+version: '3'
+
+vars:
+  QMD_FILE: demo.qmd
+  PDF_FILE: demo.pdf
+  PDF_ENGINE: xelatex
+
+tasks:
+  build:
+    desc: "Build the Quarto document to PDF"
+    dir: docs
+    cmds:
+      - quarto render {{.QMD_FILE}} --to pdf --pdf-engine={{.PDF_ENGINE}}
+    sources:
+      - docs/{{.QMD_FILE}}
+    generates:
+      - docs/{{.PDF_FILE}}
+    
+  clean:
+    desc: "Clean generated files"
+    dir: docs
+    cmds:
+      - rm -f {{.PDF_FILE}}
+      - rm -f demo.tex
+      - rm -f demo.log
+      - rm -f demo.aux
+      - rm -f demo.out
+      - rm -rf demo_files/
+      - rm -rf .quarto/
+      - rm -f demo.knit.md
+      - rm -f *.pyc
+      - rm -rf __pycache__/
+    
+  rebuild:
+    desc: "Clean and rebuild the PDF"
+    cmds:
+      - task: clean
+      - task: build
+  
+  watch:
+    desc: "Watch for changes and rebuild automatically"
+    dir: docs
+    cmds:
+      - quarto preview {{.QMD_FILE}}
+  
+  open:
+    desc: "Open the generated PDF"
+    dir: docs
+    cmds:
+      - |
+        if [ "$(uname)" = "Darwin" ]; then
+          open {{.PDF_FILE}}
+        elif [ "$(uname)" = "Linux" ]; then
+          xdg-open {{.PDF_FILE}} 2>/dev/null || evince {{.PDF_FILE}} 2>/dev/null || echo "PDF viewer not found. PDF located at docs/{{.PDF_FILE}}"
+        else
+          echo "PDF located at docs/{{.PDF_FILE}}"
+        fi
+    preconditions:
+      - test -f docs/{{.PDF_FILE}}
+  
+  build-and-open:
+    desc: "Build the PDF and open it"
+    cmds:
+      - task: build
+      - task: open
+  
+  check-deps:
+    desc: "Check if required dependencies are installed"
+    cmds:
+      - |
+        echo "Checking dependencies..."
+        command -v quarto >/dev/null 2>&1 || { echo "❌ quarto not found. Install from https://quarto.org"; exit 1; }
+        command -v python3 >/dev/null 2>&1 || { echo "❌ python3 not found"; exit 1; }
+        command -v duckdb >/dev/null 2>&1 || { echo "❌ duckdb not found"; exit 1; }
+        python3 -c "import pandas" 2>/dev/null || { echo "❌ pandas not found. Run: pip install pandas"; exit 1; }
+        python3 -c "import matplotlib" 2>/dev/null || { echo "❌ matplotlib not found. Run: pip install matplotlib"; exit 1; }
+        python3 -c "import networkx" 2>/dev/null || { echo "❌ networkx not found. Run: pip install networkx"; exit 1; }
+        echo "✅ All dependencies are installed!"
+  
+  install-deps:
+    desc: "Install Python dependencies"
+    cmds:
+      - pip install pandas matplotlib networkx tabulate
+  
+  info:
+    desc: "Show information about the document"
+    dir: docs
+    cmds:
+      - |
+        echo "=== Quarto Document Information ==="
+        echo "Document: {{.QMD_FILE}}"
+        echo "Output: {{.PDF_FILE}}"
+        echo "PDF Engine: {{.PDF_ENGINE}}"
+        echo ""
+        if [ -f {{.PDF_FILE}} ]; then
+          echo "PDF Status: ✅ Generated"
+          echo "PDF Size: $(du -h {{.PDF_FILE}} | cut -f1)"
+          echo "Last Modified: $(stat -f "%Sm" {{.PDF_FILE}} 2>/dev/null || stat -c "%y" {{.PDF_FILE}} 2>/dev/null | cut -d. -f1)"
+        else
+          echo "PDF Status: ❌ Not generated yet"
+          echo "Run 'task build' to generate the PDF"
+        fi
+    silent: true
+
+  default:
+    desc: "Show available tasks"
+    cmds:
+      - task --list
+    silent: true
