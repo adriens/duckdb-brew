@@ -103,7 +103,6 @@ tasks:
     silent: true
 
   default:
-    desc: "Show available tasks"
+    desc: "Build the Quarto document to PDF (default)"
     cmds:
-      - task --list
-    silent: true
+      - task: build
