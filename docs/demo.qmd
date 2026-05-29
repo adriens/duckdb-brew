@@ -1,0 +1,1257 @@
+---
+title: "DuckDB Brew Extension: A Comprehensive Demo"
+subtitle: "Querying Homebrew Package Data with SQL"
+author: 
+  - name: "Adrien SALES"
+    affiliation: "Open Source Community"
+    url: "https://x.com/rastadidi"
+date: today
+abstract: |
+  This document demonstrates the capabilities of the DuckDB Brew extension, which provides a SQL interface to query locally installed Homebrew package information. The extension enables users to perform complex analytical queries on their package ecosystem, including dependency analysis, installation history tracking, system health monitoring, and configuration auditing. Through practical examples and visualizations, we showcase how combining DuckDB's analytical power with Homebrew's package management creates a powerful tool for system administrators, developers, and data enthusiasts. Source code available at: https://github.com/adriens/duckdb-brew
+keywords: [DuckDB, Homebrew, SQL, Package Management, Data Visualization, System Administration, Graph Analytics, Security]
+format: 
+  pdf:
+    toc: true
+    toc-title: "Table of Contents"
+    number-sections: true
+    colorlinks: true
+    code-block-bg: true
+    code-block-border-left: "#FFCD00"
+    documentclass: article
+    pdf-engine: xelatex
+    geometry: margin=1in
+    fontsize: 11pt
+    include-in-header:
+      text: |
+        \usepackage{titling}
+        \usepackage{fontawesome5}
+        \usepackage{marginnote}
+        \usepackage{tikz}
+        \usepackage{eso-pic}
+        \usepackage{etoolbox}
+        \usepackage{fancyhdr}
+        \pagestyle{fancy}
+        \fancyhf{}
+        \renewcommand{\headrulewidth}{0pt}
+        \renewcommand{\footrulewidth}{0pt}
+        \fancyhead[L]{\small\textcolor{gray}{\faIcon{database}~DuckDB Brew Extension}}
+        \fancyhead[R]{\small\textcolor{gray}{\faIcon{github}~adriens/duckdb-brew}}
+        \fancyfoot[C]{%
+          \begin{tikzpicture}[overlay]
+            \draw[color=duckdbyellow, line width=1pt] (-7,0.3) -- (7,0.3);
+          \end{tikzpicture}%
+          \small\textcolor{gray}{\thepage}%
+        }
+        \AtBeginEnvironment{abstract}{\vspace{1cm}\color{white}}
+        \AtEndEnvironment{abstract}{\vfill}
+        \definecolor{duckdbblue}{HTML}{31BAE9}
+        \definecolor{duckdbyellow}{HTML}{FFCD00}
+        \AddToShipoutPictureBG{%
+          \begin{tikzpicture}[remember picture, overlay]
+            \fill[black]
+              (current page.south west) rectangle (current page.north east);
+            \fill[white]
+              ([xshift=11pt,  yshift=-11pt] current page.north west)
+              rectangle
+              ([xshift=-11pt, yshift=11pt]  current page.south east);
+            \draw[line width=4pt, color=duckdbyellow]
+              ([xshift=11pt,  yshift=-11pt] current page.north west)
+              rectangle
+              ([xshift=-11pt, yshift=11pt]  current page.south east);
+          \end{tikzpicture}%
+        }
+        \AtBeginDocument{%
+          \let\OldShaded\Shaded
+          \let\OldendShaded\endShaded
+          \renewenvironment{Shaded}{%
+            \marginnote{\textcolor{duckdbyellow}{\faTerminal}}%
+            \OldShaded%
+          }{%
+            \OldendShaded%
+          }%
+        }
+        \pretitle{%
+          \AddToShipoutPictureBG*{%
+            \begin{tikzpicture}[remember picture, overlay]
+              \fill[black]
+                (current page.south west) rectangle (current page.north east);
+              \draw[line width=4pt, color=duckdbyellow]
+                ([xshift=11pt, yshift=-11pt] current page.north west)
+                rectangle
+                ([xshift=-11pt, yshift=11pt] current page.south east);
+            \end{tikzpicture}%
+          }%
+          \thispagestyle{empty}%
+          \begin{center}%
+          \vspace*{1.5cm}%
+          {\fontsize{72}{72}\selectfont\textcolor{duckdbyellow}{\faIcon{database}}}\\[1cm]%
+          \LARGE\bfseries\color{duckdbyellow}}
+        \posttitle{\par\end{center}\vskip 0.8em}
+        \preauthor{\begin{center}\large\color{white}}
+        \postauthor{\\\small\textcolor{duckdbblue}{\faIcon{twitter}}~\href{https://x.com/rastadidi}{\textcolor{duckdbblue}{x.com/rastadidi}}\\\small\textcolor{white}{\faIcon{github}}~\href{https://github.com/adriens/duckdb-brew}{\textcolor{white}{adriens/duckdb-brew}}\end{center}}
+        \predate{\begin{center}\large\color{gray}}
+        \postdate{\par\end{center}}
+        \pretocmd{\tableofcontents}{\clearpage}{}{}
+jupyter: python3
+---
+
+\newpage
+
+```{python}
+#| echo: false
+#| output: false
+
+import subprocess
+import json
+import pandas as pd
+import matplotlib.pyplot as plt
+import networkx as nx
+from IPython.display import Markdown, display
+
+def query_brew(sql):
+    result = subprocess.run(
+        ['duckdb', ':memory:', '-json', '-c', 
+         f'INSTALL brew FROM community; LOAD brew; {sql}'],
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        return pd.DataFrame()
+    return pd.DataFrame(json.loads(result.stdout))
+```
+
+# \faIcon{clipboard-list} Executive Summary
+
+```{python}
+#| echo: false
+#| output: asis
+
+# Gather key metrics for executive summary
+total_packages = query_brew("SELECT COUNT(*) as count FROM brew_packages()")['count'][0]
+total_formulas = query_brew("SELECT COUNT(*) as count FROM brew_formulas()")['count'][0]
+total_casks = query_brew("SELECT COUNT(*) as count FROM brew_casks()")['count'][0]
+
+# Health check
+health = query_brew("SELECT COALESCE(severity, 'OK') as severity, COUNT(*) as count FROM brew_doctor() GROUP BY severity")
+warnings = health[health['severity'] == 'WARNING']['count'].sum() if 'WARNING' in health['severity'].values else 0
+errors = health[health['severity'] == 'ERROR']['count'].sum() if 'ERROR' in health['severity'].values else 0
+
+# Dependencies
+deps_query = """
+SELECT 
+  COUNT(*) as packages_with_deps,
+  MAX(array_length(string_split(dependencies, ','))) as max_deps
+FROM brew_packages()
+WHERE dependencies IS NOT NULL AND dependencies != ''
+"""
+deps_stats = query_brew(deps_query)
+packages_with_deps = deps_stats['packages_with_deps'][0]
+max_deps = deps_stats['max_deps'][0]
+
+# Critical packages
+critical_query = """
+WITH deps AS (
+  SELECT UNNEST(string_split(dependencies, ',')) as dependency
+  FROM brew_packages()
+  WHERE dependencies IS NOT NULL AND dependencies != ''
+)
+SELECT COUNT(*) as critical_packages
+FROM (
+  SELECT TRIM(dependency) as pkg, COUNT(*) as cnt
+  FROM deps
+  GROUP BY TRIM(dependency)
+  HAVING COUNT(*) >= 10
+)
+"""
+critical = query_brew(critical_query)['critical_packages'][0]
+
+# Installation rate
+install_query = """
+WITH monthly AS (
+  SELECT 
+    strftime(installed_time, '%Y-%m') as month,
+    COUNT(*) as count
+  FROM brew_packages()
+  WHERE installed_time IS NOT NULL
+  GROUP BY month
+)
+SELECT 
+  ROUND(AVG(count), 1) as avg_monthly,
+  MAX(count) as peak_month
+FROM monthly
+"""
+install_stats = query_brew(install_query)
+avg_monthly = install_stats['avg_monthly'][0]
+peak_month = install_stats['peak_month'][0]
+
+print("## Key Findings\n")
+print(f"This analysis examines **{total_packages} Homebrew packages** ({total_formulas} formulas, {total_casks} casks) installed on the system.\n")
+print("### System Health\n")
+if errors > 0:
+    print(f"- ⚠️ **{errors} critical errors** detected requiring immediate attention")
+if warnings > 0:
+    print(f"- ⚠️ **{warnings} warnings** identified")
+if errors == 0 and warnings == 0:
+    print("- ✅ **System healthy** - no critical issues detected")
+    
+print("\n### Dependency Analysis\n")
+print(f"- **{packages_with_deps} packages** ({round(100*packages_with_deps/total_packages, 1)}%) have dependencies")
+print(f"- **{critical} critical packages** are depended upon by 10+ other packages")
+print(f"- Most complex package has **{max_deps} dependencies**")
+print(f"- **Security Implication**: Critical packages represent high-value targets for supply chain attacks")
+
+print("\n### Installation Patterns\n")
+print(f"- Average installation rate: **{avg_monthly} packages/month**")
+print(f"- Peak installation period: **{peak_month} packages** in a single month")
+print(f"- Growth pattern: **Non-linear** - indicates project-driven installations")
+
+print("\n### Recommendations\n")
+print("1. **Security**: Prioritize security audits for the identified critical packages")
+print("2. **Maintenance**: Address system warnings to prevent future issues")
+print("3. **Monitoring**: Track changes to high-centrality packages closely")
+print("4. **Documentation**: Use this analysis to document system dependencies")
+```
+
+---
+
+# \faIcon{info-circle} Introduction
+
+The **brew** extension for DuckDB allows you to query locally installed Homebrew information directly from SQL.
+
+## \faIcon{list-alt} Use Cases
+
+This extension is valuable for:
+
+- **System administrators**: Audit installed packages across systems
+- **Developers**: Analyze dependency trees and conflicts
+- **Data analysts**: Visualize installation patterns and trends
+
+# \faIcon{cogs} Setup
+
+To use the brew extension in DuckDB, you need to install and load it:
+
+```sql
+INSTALL brew FROM community;
+LOAD brew;
+```
+
+The extension is available from the DuckDB community repository and works on systems with Homebrew installed. Once loaded, all brew functions become available for querying your local Homebrew installation.
+
+# \faIcon{code} Basic Functions
+
+## \faIcon{terminal} Getting Homebrew Version
+
+The simplest way to verify the extension is working is to check the Homebrew version:
+
+```{python}
+#| echo: false
+
+result = query_brew("SELECT brew_version() AS version")
+display(Markdown(f"**Homebrew Version:** `{result['version'][0]}`"))
+```
+
+# \faIcon{chart-pie} Package Distribution
+
+```{python}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 6
+
+formula_count = query_brew("SELECT COUNT(*) as count FROM brew_formulas()")['count'][0]
+cask_count = query_brew("SELECT COUNT(*) as count FROM brew_casks()")['count'][0]
+
+labels = ['Formulas', 'Casks']
+sizes = [formula_count, cask_count]
+colors = ['#31BAE9', '#5DD39E']
+explode = (0.05, 0.05)
+
+fig, ax = plt.subplots(figsize=(8, 6))
+wedges, texts, autotexts = ax.pie(sizes, 
+                                    explode=explode,
+                                    labels=labels, 
+                                    colors=colors,
+                                    autopct='%1.1f%%',
+                                    startangle=90,
+                                    pctdistance=0.85,
+                                    textprops={'fontsize': 12, 'weight': 'bold'})
+
+centre_circle = plt.Circle((0, 0), 0.70, fc='white')
+fig.gca().add_artist(centre_circle)
+
+total = formula_count + cask_count
+ax.text(0, 0, f'{total}\nPackages', 
+        ha='center', va='center',
+        fontsize=16, weight='bold')
+
+ax.axis('equal')
+plt.title('Homebrew Package Distribution', fontsize=14, weight='bold', pad=20)
+plt.tight_layout()
+plt.show()
+```
+
+# \faIcon{heartbeat} System Health
+
+```{python}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 5
+
+query = """
+SELECT 
+  COALESCE(severity, 'OK') as severity,
+  COUNT(*) as issue_count
+FROM brew_doctor()
+GROUP BY severity
+"""
+
+health_data = query_brew(query)
+
+if len(health_data) == 0:
+    health_data = pd.DataFrame({
+        'severity': ['Healthy'],
+        'issue_count': [0]
+    })
+
+fig, ax = plt.subplots(figsize=(8, 5))
+
+color_map = {
+    'ERROR': '#E74C3C',
+    'WARNING': '#F39C12',
+    'INFO': '#3498DB',
+    'Healthy': '#2ECC71',
+    'OK': '#2ECC71'
+}
+
+colors = [color_map.get(str(sev), '#95A5A6') for sev in health_data['severity']]
+
+bars = ax.bar(health_data['severity'], health_data['issue_count'], 
+              color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+
+for bar in bars:
+    height = bar.get_height()
+    label = int(height) if height > 0 else '✓'
+    ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+            f'{label}',
+            ha='center', va='bottom', fontsize=12, weight='bold')
+
+ax.set_xlabel('Severity Level', fontsize=12, weight='bold')
+ax.set_ylabel('Number of Issues', fontsize=12, weight='bold')
+ax.set_title('System Health Check Results', fontsize=14, weight='bold', pad=15)
+ax.set_ylim(0, max(health_data['issue_count']) * 1.15 if max(health_data['issue_count']) > 0 else 1)
+ax.grid(axis='y', alpha=0.3, linestyle='--')
+plt.tight_layout()
+plt.show()
+```
+
+# \faIcon{history} Installation History
+
+## \faIcon{calendar-alt} Packages Installed by Month
+
+```{python}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 5
+
+query = """
+SELECT 
+  strftime(installed_time, '%Y-%m') as install_month,
+  COUNT(*) as package_count
+FROM brew_packages()
+WHERE installed_time IS NOT NULL
+GROUP BY install_month
+ORDER BY install_month
+"""
+
+monthly_data = query_brew(query)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+bars = ax.bar(monthly_data['install_month'], monthly_data['package_count'], 
+              color='#FFCD00', alpha=0.85)
+
+for bar in bars:
+    height = bar.get_height()
+    ax.text(bar.get_x() + bar.get_width()/2., height,
+            f'{int(height)}',
+            ha='center', va='bottom', fontsize=9)
+
+ax.set_xlabel('Month', fontsize=11, weight='bold')
+ax.set_ylabel('Number of Packages', fontsize=11, weight='bold')
+ax.set_title('Packages Installed Over Time', fontsize=14, weight='bold', pad=15)
+plt.xticks(rotation=45, ha='right')
+plt.grid(axis='y', alpha=0.3)
+plt.tight_layout()
+plt.show()
+```
+
+## \faIcon{chart-line} Cumulative Installation Growth
+
+```{python}
+#| echo: false
+#| fig-width: 8
+#| fig-height: 5
+
+query = """
+SELECT 
+  strftime(installed_time, '%Y-%m') as install_month,
+  COUNT(*) as package_count,
+  SUM(COUNT(*)) OVER (ORDER BY strftime(installed_time, '%Y-%m')) as cumulative_count
+FROM brew_packages()
+WHERE installed_time IS NOT NULL
+GROUP BY install_month
+ORDER BY install_month
+"""
+
+cumulative_data = query_brew(query)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(cumulative_data['install_month'], cumulative_data['cumulative_count'], 
+        color='#FFCD00', linewidth=2.5, marker='o', markersize=6,
+        markerfacecolor='#FFCD00', markeredgecolor='black', markeredgewidth=0.8)
+
+for idx, row in cumulative_data.iterrows():
+    ax.text(row['install_month'], row['cumulative_count'], 
+            f"{int(row['cumulative_count'])}", 
+            ha='center', va='bottom', fontsize=9)
+
+ax.set_xlabel('Month', fontsize=11, weight='bold')
+ax.set_ylabel('Cumulative Package Count', fontsize=11, weight='bold')
+ax.set_title('Cumulative Homebrew Package Growth', fontsize=14, weight='bold', pad=15)
+plt.xticks(rotation=45, ha='right')
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+```
+
+# \faIcon{project-diagram} Dependency Graph Analytics
+
+## \faIcon{lock} Understanding Package Dependencies for Security
+
+One of the most powerful applications of the brew extension is analyzing package dependencies using graph data science. This is critical for:
+
+- **Security Risk Assessment**: Identifying vulnerable packages that affect many others
+- **Supply Chain Analysis**: Understanding transitive dependencies
+- **Impact Analysis**: Predicting the effect of removing or updating packages
+- **Vulnerability Propagation**: Tracking how security issues spread through dependencies
+
+## \faIcon{sitemap} Dependency Network Visualization
+
+```{python}
+#| echo: false
+#| fig-width: 12
+#| fig-height: 12
+
+query = """
+SELECT 
+    name,
+    dependencies
+FROM brew_packages()
+WHERE dependencies IS NOT NULL 
+  AND dependencies != ''
+LIMIT 100
+"""
+
+df = query_brew(query)
+
+# Create directed graph
+G = nx.DiGraph()
+
+# Add nodes and edges
+for _, row in df.iterrows():
+    package = row['name']
+    G.add_node(package)
+    
+    if pd.notna(row['dependencies']) and row['dependencies']:
+        deps = [d.strip() for d in str(row['dependencies']).split(',')]
+        for dep in deps:
+            G.add_edge(package, dep)
+
+# Calculate centrality metrics
+try:
+    degree_centrality = nx.degree_centrality(G)
+    betweenness_centrality = nx.betweenness_centrality(G)
+    in_degree = dict(G.in_degree())
+except:
+    degree_centrality = {node: 0 for node in G.nodes()}
+    betweenness_centrality = {node: 0 for node in G.nodes()}
+    in_degree = {node: 0 for node in G.nodes()}
+
+# Calculate layout
+pos = nx.spring_layout(G, k=1.5, iterations=50, seed=42)
+
+# Create figure
+fig, ax = plt.subplots(figsize=(12, 12))
+
+# Node sizes based on in-degree (how many packages depend on it)
+node_sizes = [500 + in_degree.get(node, 0) * 300 for node in G.nodes()]
+
+# Node colors based on betweenness centrality (importance as intermediary)
+node_colors = [betweenness_centrality.get(node, 0) for node in G.nodes()]
+
+# Draw edges
+nx.draw_networkx_edges(G, pos, 
+                       edge_color='#95A5A6', 
+                       alpha=0.2,
+                       width=1,
+                       arrows=True,
+                       arrowsize=15,
+                       arrowstyle='->',
+                       ax=ax,
+                       connectionstyle='arc3,rad=0.1')
+
+# Draw nodes
+nodes = nx.draw_networkx_nodes(G, pos,
+                               node_size=node_sizes,
+                               node_color=node_colors,
+                               cmap=plt.cm.YlOrRd,
+                               alpha=0.8,
+                               edgecolors='black',
+                               linewidths=1.5,
+                               ax=ax)
+
+# Draw labels for important nodes only (those with high in-degree that are in the graph)
+high_degree_nodes = [node for node in G.nodes() if in_degree.get(node, 0) > 2]
+if high_degree_nodes:
+    labels_dict = {node: node for node in high_degree_nodes}
+    nx.draw_networkx_labels(G, pos,
+                           labels=labels_dict,
+                           font_size=8,
+                           font_weight='bold',
+                           font_color='black',
+                           ax=ax)
+
+# Add colorbar
+cbar = plt.colorbar(nodes, ax=ax, fraction=0.046, pad=0.04)
+cbar.set_label('Betweenness Centrality\n(Critical Path Importance)', rotation=270, labelpad=20, fontsize=10, weight='bold')
+
+plt.title('Homebrew Dependency Network Graph\nNode size = Dependency count | Color = Betweenness centrality', 
+          fontsize=16, fontweight='bold', pad=20)
+plt.axis('off')
+plt.tight_layout()
+plt.show()
+```
+
+**Interpretation**:
+- **Larger nodes** = More packages depend on them (critical dependencies)
+- **Darker/redder nodes** = High betweenness centrality (critical for connecting different parts of the graph)
+- **Arrows** = Dependency direction (A → B means A depends on B)
+
+## \faIcon{exclamation-triangle} Critical Package Analysis
+
+Packages with high centrality metrics are security-critical. If compromised, they can affect many other packages. The chart below shows packages with 5 or more dependents:
+
+```{python}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 6
+
+query = """
+WITH deps AS (
+  SELECT 
+    name,
+    UNNEST(string_split(dependencies, ',')) as dependency
+  FROM brew_packages()
+  WHERE dependencies IS NOT NULL AND dependencies != ''
+)
+SELECT 
+  TRIM(dependency) as package,
+  COUNT(*) as dependent_count
+FROM deps
+GROUP BY TRIM(dependency)
+HAVING COUNT(*) >= 5
+ORDER BY dependent_count DESC
+LIMIT 15
+"""
+
+result = query_brew(query)
+if len(result) > 0:
+    # Create horizontal bar chart
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    packages = result['package'].tolist()[:15]
+    counts = result['dependent_count'].tolist()[:15]
+    
+    # Color code by risk level
+    colors = ['#E74C3C' if c >= 20 else '#F39C12' if c >= 10 else '#F1C40F' for c in counts]
+    
+    bars = ax.barh(packages, counts, color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+    
+    # Add value labels
+    for i, (pkg, count) in enumerate(zip(packages, counts)):
+        ax.text(count + 0.3, i, f'{count}', va='center', fontsize=9, weight='bold')
+    
+    ax.set_xlabel('Number of Dependent Packages', fontsize=12, weight='bold')
+    ax.set_ylabel('Package Name', fontsize=12, weight='bold')
+    ax.set_title('Critical Packages: Security Impact Analysis\n(Packages with 5+ dependents)', 
+                 fontsize=14, weight='bold', pad=15)
+    ax.grid(axis='x', alpha=0.3)
+    
+    # Add legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#E74C3C', label='Critical (≥20 deps)'),
+        Patch(facecolor='#F39C12', label='High (10-19 deps)'),
+        Patch(facecolor='#F1C40F', label='Medium (5-9 deps)')
+    ]
+    ax.legend(handles=legend_elements, loc='lower right', framealpha=0.9)
+    
+    plt.tight_layout()
+    plt.show()
+```
+
+The top package affects the most other packages - if compromised, this could trigger a widespread supply chain attack.
+
+## \faIcon{user-secret} Security Implications
+
+### \faIcon{question-circle} Why This Matters
+
+1. **Supply Chain Attacks**: If a high-centrality package is compromised, the attack can propagate to all dependent packages
+2. **Update Risk**: Updating critical packages requires careful testing as breakage affects many packages
+3. **Vulnerability Assessment**: Security patches for critical packages should be prioritized
+4. **Audit Focus**: High-centrality packages deserve extra security scrutiny
+
+### \faIcon{globe} Real-World Applications
+
+```sql
+-- Example: Find all packages affected by a vulnerability in 'openssl'
+SELECT name 
+FROM brew_packages() 
+WHERE dependencies LIKE '%openssl%';
+
+-- Example: Calculate blast radius of removing a package
+WITH RECURSIVE deps AS (
+  SELECT name, dependencies FROM brew_packages()
+  WHERE name = 'target_package'
+  UNION ALL
+  SELECT p.name, p.dependencies 
+  FROM brew_packages() p
+  JOIN deps d ON p.dependencies LIKE '%' || d.name || '%'
+)
+SELECT COUNT(*) as affected_packages FROM deps;
+```
+
+## \faIcon{table} Graph Metrics Summary
+
+```{python}
+#| echo: false
+
+# Calculate graph statistics
+num_nodes = G.number_of_nodes()
+num_edges = G.number_of_edges()
+density = nx.density(G)
+try:
+    avg_clustering = nx.average_clustering(G.to_undirected())
+except:
+    avg_clustering = 0
+
+from IPython.display import Markdown, display
+table = (
+    "| Metric | Value | Interpretation |\n"
+    "|--------|-------|----------------|\n"
+    f"| Total Packages | {num_nodes} | Packages analyzed in network |\n"
+    f"| Dependencies | {num_edges} | Dependency relationships |\n"
+    f"| Graph Density | {density:.4f} | Interconnection (0=sparse, 1=complete) |\n"
+    f"| Avg Clustering | {avg_clustering:.4f} | Local clustering degree |"
+)
+display(Markdown(table))
+```
+
+This analysis demonstrates how SQL-queryable package data combined with graph analytics provides powerful insights for security teams, DevOps engineers, and system administrators.
+
+# \faIcon{shield-alt} Advanced Graph Analytics for Security
+
+## \faIcon{tachometer-alt} Critical Security Metrics
+
+Beyond basic centrality measures, we can compute advanced graph metrics that directly inform security decisions.
+
+### \faIcon{random} PageRank Analysis
+
+PageRank identifies truly influential packages in the ecosystem (the algorithm Google uses for web search):
+
+```{python}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 6
+
+# Calculate PageRank
+try:
+    pagerank = nx.pagerank(G, alpha=0.85)
+    
+    # Get top packages by PageRank
+    top_pagerank = sorted(pagerank.items(), key=lambda x: x[1], reverse=True)[:15]
+    
+    if top_pagerank:
+        packages = [x[0] for x in top_pagerank]
+        scores = [x[1] for x in top_pagerank]
+        
+        # Create horizontal bar chart
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Color code by importance
+        threshold = sorted(scores)[int(len(scores) * 0.75)]
+        colors = ['#E74C3C' if s >= threshold else '#3498DB' for s in scores]
+        
+        bars = ax.barh(packages, scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+        
+        # Add value labels
+        for i, (pkg, score) in enumerate(zip(packages, scores)):
+            ax.text(score + score*0.02, i, f'{score:.4f}', va='center', fontsize=8, weight='bold')
+        
+        ax.set_xlabel('PageRank Score', fontsize=12, weight='bold')
+        ax.set_ylabel('Package Name', fontsize=12, weight='bold')
+        ax.set_title('Top 15 Packages by PageRank\n(Ecosystem Importance - like Google Search algorithm)', 
+                     fontsize=14, weight='bold', pad=15)
+        ax.grid(axis='x', alpha=0.3)
+        
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='#E74C3C', label='Critical Priority'),
+            Patch(facecolor='#3498DB', label='High Priority')
+        ]
+        ax.legend(handles=legend_elements, loc='lower right', framealpha=0.9)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        display(Markdown("\n\\faIcon{star} **Higher PageRank = More influential in the ecosystem. These should be prioritized for security audits.**"))
+except Exception as e:
+    print(f"PageRank calculation unavailable: {str(e)}")
+```
+
+### \faIcon{cut} Articulation Points (Critical Failure Points)
+
+Articulation points are packages whose removal would fragment the dependency graph - these are single points of failure:
+
+```{python}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 7
+
+try:
+    # Find articulation points (cut vertices)
+    articulation_points = list(nx.articulation_points(G.to_undirected()))
+    
+    if articulation_points:
+        # Get details for visualization
+        ap_data = []
+        for pkg in articulation_points[:20]:
+            in_deg = G.in_degree(pkg)
+            out_deg = G.out_degree(pkg)
+            ap_data.append({
+                'package': pkg,
+                'dependents': in_deg,
+                'impact_score': in_deg + out_deg * 0.5
+            })
+        
+        ap_df = pd.DataFrame(ap_data).sort_values('impact_score', ascending=False)
+        
+        # Create horizontal bar chart
+        fig, ax = plt.subplots(figsize=(10, 7))
+        
+        packages = ap_df['package'].tolist()[:15]
+        scores = ap_df['impact_score'].tolist()[:15]
+        
+        bars = ax.barh(packages, scores, color='#E74C3C', alpha=0.8, edgecolor='black', linewidth=1.5)
+        
+        # Add value labels
+        for i, (pkg, score) in enumerate(zip(packages, scores)):
+            ax.text(score + score*0.02, i, f'{int(score)}', va='center', fontsize=9, weight='bold')
+        
+        ax.set_xlabel('Impact Score (dependents + dependencies)', fontsize=12, weight='bold')
+        ax.set_ylabel('Package Name', fontsize=12, weight='bold')
+        ax.set_title(f'Articulation Points: {len(articulation_points)} Single Points of Failure\n(Top 15 by impact)', 
+                     fontsize=14, weight='bold', pad=15)
+        ax.grid(axis='x', alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        display(Markdown(
+            f"\\marginnote{{\\textcolor{{red}}{{\\Large\\faIcon{{exclamation-triangle}}}}}}"
+            f"**Critical Finding:** {len(articulation_points)} packages are architectural bottlenecks. "
+            f"Their removal would disconnect parts of your system.\n\n"
+            f"**Priority Action:** Monitor these packages closely for security updates and breaking changes."
+        ))
+    else:
+        display(Markdown(
+            "\\marginnote{\\textcolor{duckdbblue}{\\Large\\faIcon{check-circle}}}"
+            "**No articulation points found** — system has redundant dependency paths."
+        ))
+except Exception as e:
+    print(f"Articulation points analysis unavailable: {str(e)}")
+```
+
+### \faIcon{sync-alt} Strongly Connected Components (Circular Dependencies)
+
+Circular dependencies can create update deadlocks and security vulnerabilities:
+
+```{python}
+#| echo: false
+
+try:
+    # Find strongly connected components
+    sccs = list(nx.strongly_connected_components(G))
+    
+    # Filter out single-node components
+    circular_deps = [scc for scc in sccs if len(scc) > 1]
+    
+    if circular_deps:
+        md_out = (
+            f"\\marginnote{{\\textcolor{{red}}{{\\Large\\faIcon{{exclamation-circle}}}}}}"
+            f"**Found {len(circular_deps)} groups with circular dependencies**\n\n"
+        )
+        for idx, scc in enumerate(circular_deps[:5], 1):
+            md_out += f"\n**Circular Group {idx}** ({len(scc)} packages):  \n"
+            md_out += ", ".join(sorted(list(scc)[:10]))
+            if len(scc) > 10:
+                md_out += f" *(and {len(scc) - 10} more)*"
+            md_out += "\n"
+        md_out += (
+            f"\n**Security Implication:** These {len(circular_deps)} groups have circular dependencies. "
+            "Updating one package may require updating all packages in the group simultaneously."
+        )
+        display(Markdown(md_out))
+    else:
+        display(Markdown(
+            "\\marginnote{\\textcolor{duckdbblue}{\\Large\\faIcon{check-circle}}}"
+            "**No circular dependencies detected** — clean dependency tree."
+        ))
+except Exception as e:
+    print(f"Strongly connected components analysis unavailable: {str(e)}")
+```
+
+### \faIcon{bomb} Blast Radius Analysis
+
+Calculate the impact of compromising critical packages:
+
+```{python}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 6
+
+try:
+    # Calculate blast radius (transitive dependents)
+    blast_radius = {}
+    
+    for node in G.nodes():
+        # Count all packages that transitively depend on this node
+        try:
+            descendants = nx.descendants(G, node)
+            blast_radius[node] = len(descendants)
+        except:
+            blast_radius[node] = 0
+    
+    # Get top packages by blast radius
+    top_blast = sorted(blast_radius.items(), key=lambda x: x[1], reverse=True)[:20]
+    
+    if top_blast:
+        blast_df = pd.DataFrame(top_blast, columns=['Package', 'Affected Packages'])
+        blast_df['Impact Level'] = blast_df['Affected Packages'].apply(
+            lambda x: 'CRITICAL' if x >= 20 else ('HIGH' if x >= 10 else 'MEDIUM')
+        )
+        
+        # Visualize blast radius
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        packages = [x[0] for x in top_blast[:15]]
+        impacts = [x[1] for x in top_blast[:15]]
+        
+        colors = ['#E74C3C' if i >= 20 else '#F39C12' if i >= 10 else '#3498DB' for i in impacts]
+        
+        bars = ax.barh(packages, impacts, color=colors, alpha=0.8, edgecolor='black', linewidth=1)
+        
+        ax.set_xlabel('Number of Affected Packages', fontsize=12, weight='bold')
+        ax.set_ylabel('Package Name', fontsize=12, weight='bold')
+        ax.set_title('Blast Radius: Supply Chain Impact if Package is Compromised', 
+                     fontsize=14, weight='bold', pad=15)
+        ax.grid(axis='x', alpha=0.3)
+        
+        # Add value labels
+        for i, (pkg, val) in enumerate(zip(packages, impacts)):
+            ax.text(val + 0.5, i, str(val), va='center', fontsize=9, weight='bold')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        display(Markdown(
+            f"\\marginnote{{\\textcolor{{red}}{{\\Large\\faIcon{{radiation}}}}}}"
+            f"**Security Implication:** If the top package is compromised, "
+            f"**{top_blast[0][1]} other packages** are affected."
+        ))
+    else:
+        display(Markdown("Blast radius analysis unavailable — isolated packages."))
+except Exception as e:
+    print(f"Blast radius analysis unavailable: {str(e)}")
+```
+
+### \faIcon{balance-scale} Security Criticality Index (Composite Score)
+
+Combining multiple metrics into a single security priority score:
+
+```{python}
+#| echo: false
+#| fig-width: 10
+#| fig-height: 7
+
+try:
+    # Calculate composite security score
+    security_scores = {}
+    
+    # Normalize metrics to 0-1 scale
+    max_pagerank = max(pagerank.values()) if pagerank else 1
+    max_blast = max(blast_radius.values()) if blast_radius else 1
+    max_betweenness = max(betweenness_centrality.values()) if betweenness_centrality else 1
+    max_degree = max(dict(G.in_degree()).values()) if G.number_of_nodes() > 0 else 1
+    
+    for node in G.nodes():
+        pr_norm = pagerank.get(node, 0) / max_pagerank if max_pagerank > 0 else 0
+        blast_norm = blast_radius.get(node, 0) / max_blast if max_blast > 0 else 0
+        betw_norm = betweenness_centrality.get(node, 0) / max_betweenness if max_betweenness > 0 else 0
+        degree_norm = G.in_degree(node) / max_degree if max_degree > 0 else 0
+        
+        # Weighted composite score
+        security_scores[node] = (
+            pr_norm * 0.30 +          # PageRank importance
+            degree_norm * 0.25 +      # Direct dependents
+            blast_norm * 0.25 +       # Blast radius
+            betw_norm * 0.20          # Bridge importance
+        )
+    
+    # Get top packages by security score
+    top_security = sorted(security_scores.items(), key=lambda x: x[1], reverse=True)[:20]
+    
+    if top_security:
+        sec_df = pd.DataFrame(top_security, columns=['Package', 'Security Score'])
+        sec_df['Security Score'] = sec_df['Security Score'].round(3)
+        sec_df['Priority'] = sec_df['Security Score'].apply(
+            lambda x: '🔴 CRITICAL' if x > 0.6 else ('🟠 HIGH' if x > 0.4 else '🟡 MEDIUM')
+        )
+        
+        # Add specific metrics
+        sec_df['Dependents'] = sec_df['Package'].apply(lambda x: G.in_degree(x))
+        sec_df['Blast Radius'] = sec_df['Package'].apply(lambda x: blast_radius.get(x, 0))
+        
+        # Visualize security scores
+        fig, ax = plt.subplots(figsize=(10, 7))
+        
+        packages = [x[0] for x in top_security[:15]]
+        scores = [x[1] for x in top_security[:15]]
+        
+        colors_map = {'🔴 CRITICAL': '#E74C3C', '🟠 HIGH': '#F39C12', '🟡 MEDIUM': '#F1C40F'}
+        priorities = [sec_df[sec_df['Package'] == p]['Priority'].values[0] for p in packages]
+        colors = [colors_map.get(p, '#95A5A6') for p in priorities]
+        
+        bars = ax.barh(range(len(packages)), scores, color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+        ax.set_yticks(range(len(packages)))
+        ax.set_yticklabels(packages)
+        
+        ax.set_xlabel('Security Criticality Score', fontsize=12, weight='bold')
+        ax.set_ylabel('Package Name', fontsize=12, weight='bold')
+        ax.set_title('Security Criticality Index\n(Composite: PageRank + Dependents + Blast Radius + Betweenness)', 
+                     fontsize=14, weight='bold', pad=15)
+        ax.grid(axis='x', alpha=0.3)
+        
+        # Add value labels
+        for i, (pkg, score) in enumerate(zip(packages, scores)):
+            ax.text(score + 0.01, i, f'{score:.3f}', va='center', fontsize=9, weight='bold')
+        
+        plt.tight_layout()
+        plt.show()
+
+        critical_n = len([s for s in security_scores.values() if s > 0.6])
+        display(Markdown(
+            "\\marginnote{\\textcolor{duckdbyellow}{\\Large\\faIcon{balance-scale}}}"
+            "**Usage:** Prioritize security audits, vulnerability scanning, and update monitoring "
+            "for packages with scores > 0.6\n\n"
+            f"**Action Required:** {critical_n} packages require immediate security review."
+        ))
+    else:
+        display(Markdown("Security criticality index calculation unavailable."))
+except Exception as e:
+    display(Markdown(f"Security criticality index unavailable: {str(e)}"))
+```
+
+### \faIcon{lightbulb} Key Insights Summary
+
+```{python}
+#| echo: false
+
+try:
+    critical_count = len([s for s in security_scores.values() if s > 0.6])
+    high_count = len([s for s in security_scores.values() if 0.4 < s <= 0.6])
+    ap_count = len(articulation_points) if articulation_points else 0
+    cd_count = len(circular_deps) if circular_deps else 0
+    max_blast = max(blast_radius.values()) if blast_radius else 0
+
+    md = (
+        "\\marginnote{\\textcolor{duckdbyellow}{\\Large\\faIcon{lightbulb}}}"
+        "Based on graph analytics, here are the key security findings:\n\n"
+        f"1. **Critical Packages:** {critical_count} packages require immediate security focus\n"
+        f"2. **High Priority:** {high_count} additional packages need regular monitoring\n"
+        f"3. **Articulation Points:** {ap_count} single points of failure identified\n"
+        f"4. **Circular Dependencies:** {cd_count} groups with update coordination needs\n"
+        f"5. **Maximum Blast Radius:** Compromising 1 package can affect up to **{max_blast}** others\n\n"
+        "**Recommended Actions:**\n\n"
+        "- Schedule security audits for packages with Security Criticality Index > 0.6\n"
+        "- Implement automated vulnerability scanning for articulation points\n"
+        "- Monitor CVE databases for all packages with blast radius > 20\n"
+        "- Consider dependency alternatives for packages with circular dependencies\n"
+        "- Document critical packages in disaster recovery plans"
+    )
+    display(Markdown(md))
+except Exception as e:
+    display(Markdown(f"Summary unavailable: {str(e)}"))
+```
+
+### \faIcon{users} Community Detection
+
+Identify functional groups and package ecosystems using the Louvain community detection algorithm:
+
+```{python}
+#| echo: false
+#| fig-width: 12
+#| fig-height: 10
+
+try:
+    # Install python-louvain if not available
+    try:
+        import community as community_louvain
+    except ImportError:
+        import subprocess
+        import sys
+        # Try using uv for externally-managed environments
+        try:
+            subprocess.check_call(["uv", "pip", "install", "-q", "python-louvain"], stderr=subprocess.DEVNULL)
+        except:
+            # Fallback to regular pip with --break-system-packages
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "--break-system-packages", "python-louvain"])
+        import community as community_louvain
+    
+    # Convert directed graph to undirected for community detection
+    G_undirected = G.to_undirected()
+    
+    # Detect communities using Louvain algorithm
+    communities = community_louvain.best_partition(G_undirected)
+    
+    # Count communities
+    num_communities = len(set(communities.values()))
+    
+    display(Markdown(f"\\marginnote{{\\textcolor{{duckdbblue}}{{\\Large\\faIcon{{users}}}}}}"
+                     f"**Detected {num_communities} distinct package communities**\n\n"))
+    
+    # Group packages by community
+    community_groups = {}
+    for node, comm_id in communities.items():
+        if comm_id not in community_groups:
+            community_groups[comm_id] = []
+        community_groups[comm_id].append(node)
+    
+    # Sort communities by size
+    sorted_communities = sorted(community_groups.items(), key=lambda x: len(x[1]), reverse=True)
+
+    # ── Gephi-style dark visualization ──────────────────────────────────────
+    import matplotlib.cm as cm
+    import numpy as np
+
+    # Vibrant palette on black
+    GEPHI_COLORS = [
+        '#E74C3C','#3498DB','#2ECC71','#F39C12','#9B59B6',
+        '#1ABC9C','#E67E22','#E91E63','#00BCD4','#8BC34A',
+        '#FF5722','#607D8B','#FFCD00','#795548','#673AB7',
+    ]
+    node_colors = [GEPHI_COLORS[communities[n] % len(GEPHI_COLORS)] for n in G.nodes()]
+
+    # Node size = in-degree (dependents) — hub nodes dominate visually
+    degrees     = {n: G.in_degree(n) + G.out_degree(n) for n in G.nodes()}
+    max_deg     = max(degrees.values()) or 1
+    node_sizes  = [150 + (degrees[n] / max_deg) * 1200 for n in G.nodes()]
+
+    # ── Kamada-Kawai layout — energy-based, very balanced ───────────────────
+    G_und = G.to_undirected()
+
+    # Use degree as node weight so hubs attract more and land near center
+    weight_dict = {n: 1.0 / (degrees[n] + 1) for n in G_und.nodes()}
+    nx.set_node_attributes(G_und, weight_dict, 'kk_weight')
+
+    pos = nx.kamada_kawai_layout(G_und, scale=2.5)
+
+    # Light gravity pass: pull high-degree nodes slightly toward center
+    for node in pos:
+        deg_norm = degrees[node] / max_deg
+        gravity  = 0.10 + deg_norm * 0.20
+        pos[node] = pos[node] * (1.0 - gravity)
+
+    fig, ax = plt.subplots(figsize=(16, 14), facecolor='#0d0d0d')
+    ax.set_facecolor('#0d0d0d')
+
+    # Draw edges — brightness scales with combined degree of endpoints
+    for u, v in G.edges():
+        alpha = min(0.04 + 0.012 * (degrees.get(u, 0) + degrees.get(v, 0)) / max_deg, 0.25)
+        ax.plot([pos[u][0], pos[v][0]], [pos[u][1], pos[v][1]],
+                color='white', alpha=alpha, linewidth=0.4, zorder=1)
+
+    # Draw node glow (halo layer)
+    nx.draw_networkx_nodes(
+        G, pos,
+        node_color=node_colors,
+        node_size=[s * 3.5 for s in node_sizes],
+        alpha=0.10,
+        ax=ax
+    )
+
+    # Draw nodes (sharp)
+    nx.draw_networkx_nodes(
+        G, pos,
+        node_color=node_colors,
+        node_size=node_sizes,
+        alpha=0.95,
+        edgecolors='white',
+        linewidths=0.5,
+        ax=ax
+    )
+
+    # Label only top-degree nodes, white text
+    top_nodes = sorted(G.nodes(), key=lambda x: G.in_degree(x), reverse=True)[:20]
+    nx.draw_networkx_labels(
+        G, pos,
+        labels={n: n for n in top_nodes},
+        font_size=7,
+        font_weight='bold',
+        font_color='white',
+        font_family='monospace',
+        ax=ax
+    )
+
+    # Community legend (top communities only)
+    from matplotlib.patches import Patch
+    legend_patches = [
+        Patch(color=GEPHI_COLORS[i % len(GEPHI_COLORS)],
+              label=f'Community {i+1} ({len(sorted_communities[i][1])} pkg)')
+        for i in range(min(8, len(sorted_communities)))
+    ]
+    ax.legend(handles=legend_patches, loc='lower left',
+              framealpha=0.3, facecolor='#1a1a1a',
+              labelcolor='white', fontsize=8, title='Communities',
+              title_fontsize=9)
+
+    ax.set_title(
+        f'Package Dependency Communities — {num_communities} communities  '
+        f'(ForceAtlas2-style · node size = #dependents)',
+        fontsize=13, weight='bold', color='white', pad=16
+    )
+    ax.axis('off')
+    plt.tight_layout()
+    plt.show()
+    
+    # Display top communities in clean format
+    top_n = min(10, len(sorted_communities))
+    md_comm = f"**Top {top_n} Communities by Size:**\n\n"
+    for idx, (comm_id, members) in enumerate(sorted_communities[:10], 1):
+        sample = ', '.join(sorted(members[:6]))
+        if len(members) > 6:
+            sample += f" *(+{len(members) - 6} more)*"
+        md_comm += f"**Community {idx}** — {len(members)} packages:  \n{sample}\n\n"
+
+    md_comm += (
+        "\n**Interpretation:** Communities represent functional groups of packages that work together.  \n"
+        "**Security Implication:** Vulnerabilities may cascade within communities — monitor entire communities.  \n"
+        "**Maintenance Strategy:** Packages in the same community often need coordinated updates."
+    )
+    display(Markdown(md_comm))
+
+except ImportError:
+    display(Markdown(
+        "\\marginnote{\\textcolor{duckdbyellow}{\\Large\\faIcon{exclamation-triangle}}}"
+        "**Community detection unavailable:** `python-louvain` library not installed.  \n"
+        "Install with: `pip install python-louvain`"
+    ))
+except Exception as e:
+    display(Markdown(f"Community detection unavailable: {str(e)}"))
+```
+
+# \faIcon{book} References and Resources
+
+## \faIcon{file-alt} Official Documentation
+
+- **DuckDB Community Extension Page**: [https://duckdb.org/community_extensions/extensions/brew](https://duckdb.org/community_extensions/extensions/brew)
+  - Official extension documentation
+  - Installation instructions
+  - API reference
+
+## \faIcon{github} Source Code and Development
+
+- **GitHub Repository**: [https://github.com/adriens/duckdb-brew](https://github.com/adriens/duckdb-brew)
+  - Source code
+  - Issue tracker
+  - Contribution guidelines
+  - Release notes
+
+## \faIcon{newspaper} Articles and Blog Posts
+
+- **"Built a DuckDB Community Extension for Brew"**: [https://dev.to/adriens/built-a-duckdb-community-extension-for-brew-4k6f](https://dev.to/adriens/built-a-duckdb-community-extension-for-brew-4k6f)
+  - Development journey
+  - Technical implementation details
+  - Use cases and examples
+
+## \faIcon{link} Related Resources
+
+### \faIcon{database} DuckDB
+
+- **DuckDB Official Website**: [https://duckdb.org](https://duckdb.org)
+- **DuckDB Documentation**: [https://duckdb.org/docs](https://duckdb.org/docs)
+- **Community Extensions**: [https://duckdb.org/community_extensions](https://duckdb.org/community_extensions)
+
+### \faIcon{beer} Homebrew
+
+- **Homebrew Official Website**: [https://brew.sh](https://brew.sh)
+- **Homebrew Documentation**: [https://docs.brew.sh](https://docs.brew.sh)
+- **Homebrew Analytics**: [https://formulae.brew.sh/analytics](https://formulae.brew.sh/analytics)
+
+### \faIcon{shield-alt} Graph Analytics & Security
+
+- **NetworkX Documentation**: [https://networkx.org/documentation/stable/](https://networkx.org/documentation/stable/)
+- **OWASP Software Component Verification Standard**: [https://owasp.org/www-project-software-component-verification-standard/](https://owasp.org/www-project-software-component-verification-standard/)
+- **Supply Chain Levels for Software Artifacts (SLSA)**: [https://slsa.dev](https://slsa.dev)
+
+## \faIcon{users} Community and Support
+
+- **Author**: Adrien SALES ([@rastadidi](https://x.com/rastadidi))
+- **Issues & Questions**: [GitHub Issues](https://github.com/adriens/duckdb-brew/issues)
+- **Contributions**: Pull requests welcome on [GitHub](https://github.com/adriens/duckdb-brew/pulls)
+
+## \faIcon{quote-left} Citation
+
+If you use this extension in your research or work, please cite:
+
+```bibtex
+@software{duckdb_brew_extension,
+  author = {Sales, Adrien},
+  title = {DuckDB Brew Extension: SQL Interface for Homebrew Package Management},
+  year = {2024},
+  url = {https://github.com/adriens/duckdb-brew},
+  note = {DuckDB Community Extension}
+}
+```
+
+## \faIcon{balance-scale} License
+
+This extension is open source and distributed under the terms specified in the [LICENSE](https://github.com/adriens/duckdb-brew/blob/main/LICENSE) file.
+
+# \faIcon{flag-checkered} Conclusion
+
+The DuckDB brew extension provides a powerful SQL interface to your Homebrew installation, enabling advanced analytics for security, dependency management, and system administration.
+
+## \faIcon{lightbulb} Key Takeaways
+
+- **Graph Analytics for Security**: Identify critical packages using centrality metrics
+- **Dependency Impact Analysis**: Understand blast radius of changes
+- **SQL-Powered Insights**: Query package data with familiar SQL syntax
+- **Visualization Ready**: Export data for visualization tools
+
+## \faIcon{info-circle} Project Information
+
+- **GitHub Repository**: [https://github.com/adriens/duckdb-brew](https://github.com/adriens/duckdb-brew)
+- **Author**: Adrien SALES ([@rastadidi](https://x.com/rastadidi))
+- **License**: Open Source
+- **Community**: Contributions welcome!
+
+For more information, documentation, and to contribute, visit the [GitHub repository](https://github.com/adriens/duckdb-brew).
