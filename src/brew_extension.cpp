@@ -7,12 +7,15 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
+#include "yyjson.hpp"
 #include <cstdio>
 #include <memory>
 #include <array>
 #include <algorithm>
 
 namespace duckdb {
+
+using namespace duckdb_yyjson; // NOLINT
 
 // Helper function to execute a shell command and capture output
 static string ExecuteCommand(const string &command) {
@@ -57,58 +60,64 @@ struct BrewPackage {
 	int64_t size_bytes;
 };
 
-static string GetStringValue(const ComplexJSON &obj, const string &key) {
-	try {
-		string val = obj.GetValue(key);
-		if (val == "null") {
-			return "";
-		}
-		return val;
-	} catch (...) {
+// Convert a JSON value to its string representation (empty for missing or null values)
+static string JSONValueToString(yyjson_val *val) {
+	if (!val || yyjson_is_null(val)) {
 		return "";
 	}
-}
-
-static bool GetBoolValue(const ComplexJSON &obj, const string &key) {
-	try {
-		string val = obj.GetValue(key);
-		return val == "true";
-	} catch (...) {
-		return false;
+	if (yyjson_is_str(val)) {
+		return string(yyjson_get_str(val), yyjson_get_len(val));
 	}
+	if (yyjson_is_bool(val)) {
+		return yyjson_get_bool(val) ? "true" : "false";
+	}
+	if (yyjson_is_uint(val)) {
+		return to_string(yyjson_get_uint(val));
+	}
+	if (yyjson_is_sint(val)) {
+		return to_string(yyjson_get_sint(val));
+	}
+	if (yyjson_is_real(val)) {
+		return to_string(yyjson_get_real(val));
+	}
+	// Nested object or array: serialize it back to JSON
+	size_t len;
+	char *json = yyjson_val_write(val, 0, &len);
+	if (!json) {
+		return "";
+	}
+	string result(json, len);
+	free(json);
+	return result;
 }
 
-static int64_t GetInt64Value(const ComplexJSON &obj, const string &key) {
+static string GetStringValue(yyjson_val *obj, const string &key) {
+	return JSONValueToString(yyjson_obj_get(obj, key.c_str()));
+}
+
+static bool GetBoolValue(yyjson_val *obj, const string &key) {
+	return GetStringValue(obj, key) == "true";
+}
+
+static int64_t GetInt64Value(yyjson_val *obj, const string &key) {
 	try {
-		string val = obj.GetValue(key);
-		return std::stoll(val);
+		return std::stoll(GetStringValue(obj, key));
 	} catch (...) {
 		return 0;
 	}
 }
 
-static string GetArrayAsCommaSeparated(ComplexJSON &obj, const string &key) {
-	try {
-		auto &arr = obj.GetObject(key);
-		string result;
-		idx_t i = 0;
-		while (true) {
-			try {
-				auto &elem = arr.GetArrayElement(i);
-				string val = ComplexJSON::GetValueRecursive(elem);
-				if (!result.empty()) {
-					result += ", ";
-				}
-				result += val;
-				i++;
-			} catch (...) {
-				break;
-			}
+static string GetArrayAsCommaSeparated(yyjson_val *obj, const string &key) {
+	string result;
+	size_t idx, max;
+	yyjson_val *elem;
+	yyjson_arr_foreach(yyjson_obj_get(obj, key.c_str()), idx, max, elem) {
+		if (!result.empty()) {
+			result += ", ";
 		}
-		return result;
-	} catch (...) {
-		return "";
+		result += JSONValueToString(elem);
 	}
+	return result;
 }
 
 static int64_t GetPackageSize(const string &package_name, const string &package_type) {
@@ -142,137 +151,98 @@ static int64_t GetPackageSize(const string &package_name, const string &package_
 static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 	vector<BrewPackage> packages;
 
-	try {
-		auto json = StringUtil::ParseJSONMap(json_output);
+	yyjson_read_err error;
+	unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> doc(
+	    yyjson_read_opts(const_cast<char *>(json_output.c_str()), json_output.size(), 0, nullptr, &error),
+	    yyjson_doc_free);
+	if (!doc) {
+		throw IOException("Failed to parse brew JSON output: " + string(error.msg));
+	}
+	auto root = yyjson_doc_get_root(doc.get());
 
-		// Parse formulas
-		try {
-			auto &formulae = json->GetObject("formulae");
-			idx_t i = 0;
-			while (true) {
-				try {
-					BrewPackage pkg;
-					pkg.type = "formula";
+	size_t idx, max;
+	yyjson_val *formula;
+	// Parse formulas
+	yyjson_arr_foreach(yyjson_obj_get(root, "formulae"), idx, max, formula) {
+		BrewPackage pkg;
+		pkg.type = "formula";
 
-					auto &formula = formulae.GetArrayElement(i);
-					pkg.name = GetStringValue(formula, "name");
-					pkg.description = GetStringValue(formula, "desc");
-					pkg.homepage = GetStringValue(formula, "homepage");
-					pkg.tap = GetStringValue(formula, "tap");
-					pkg.license = GetStringValue(formula, "license");
+		pkg.name = GetStringValue(formula, "name");
+		pkg.description = GetStringValue(formula, "desc");
+		pkg.homepage = GetStringValue(formula, "homepage");
+		pkg.tap = GetStringValue(formula, "tap");
+		pkg.license = GetStringValue(formula, "license");
 
-					// Status flags
-					pkg.outdated = GetBoolValue(formula, "outdated");
-					pkg.pinned = GetBoolValue(formula, "pinned");
-					pkg.deprecated = GetBoolValue(formula, "deprecated");
-					pkg.disabled = GetBoolValue(formula, "disabled");
+		// Status flags
+		pkg.outdated = GetBoolValue(formula, "outdated");
+		pkg.pinned = GetBoolValue(formula, "pinned");
+		pkg.deprecated = GetBoolValue(formula, "deprecated");
+		pkg.disabled = GetBoolValue(formula, "disabled");
 
-					// Deprecation/disable info
-					pkg.deprecation_reason = GetStringValue(formula, "deprecation_reason");
-					pkg.disable_reason = GetStringValue(formula, "disable_reason");
-					pkg.caveats = GetStringValue(formula, "caveats");
+		// Deprecation/disable info
+		pkg.deprecation_reason = GetStringValue(formula, "deprecation_reason");
+		pkg.disable_reason = GetStringValue(formula, "disable_reason");
+		pkg.caveats = GetStringValue(formula, "caveats");
 
-					// Dependencies and aliases
-					pkg.dependencies = GetArrayAsCommaSeparated(formula, "dependencies");
-					pkg.aliases = GetArrayAsCommaSeparated(formula, "aliases");
+		// Dependencies and aliases
+		pkg.dependencies = GetArrayAsCommaSeparated(formula, "dependencies");
+		pkg.aliases = GetArrayAsCommaSeparated(formula, "aliases");
 
-					// Get version and installed_on_request from installed array
-					try {
-						auto &installed = formula.GetObject("installed");
-						try {
-							auto &inst_info = installed.GetArrayElement(0);
-							pkg.version = GetStringValue(inst_info, "version");
-							pkg.installed_on_request = GetBoolValue(inst_info, "installed_on_request");
-							pkg.installed_time = GetInt64Value(inst_info, "time");
-							pkg.installed_as_dependency = GetBoolValue(inst_info, "installed_as_dependency");
-							pkg.poured_from_bottle = GetBoolValue(inst_info, "poured_from_bottle");
-							pkg.built_as_bottle = GetBoolValue(inst_info, "built_as_bottle");
-						} catch (...) {
-							pkg.version = "";
-							pkg.installed_on_request = false;
-							pkg.installed_time = 0;
-							pkg.installed_as_dependency = false;
-							pkg.poured_from_bottle = false;
-							pkg.built_as_bottle = false;
-						}
-					} catch (...) {
-						pkg.version = "";
-						pkg.installed_on_request = false;
-						pkg.installed_time = 0;
-						pkg.installed_as_dependency = false;
-						pkg.poured_from_bottle = false;
-						pkg.built_as_bottle = false;
-					}
+		// Get version and installed_on_request from installed array
+		// (missing keys yield empty/false/0 defaults)
+		auto inst_info = yyjson_arr_get_first(yyjson_obj_get(formula, "installed"));
+		pkg.version = GetStringValue(inst_info, "version");
+		pkg.installed_on_request = GetBoolValue(inst_info, "installed_on_request");
+		pkg.installed_time = GetInt64Value(inst_info, "time");
+		pkg.installed_as_dependency = GetBoolValue(inst_info, "installed_as_dependency");
+		pkg.poured_from_bottle = GetBoolValue(inst_info, "poured_from_bottle");
+		pkg.built_as_bottle = GetBoolValue(inst_info, "built_as_bottle");
 
-					// Calculate package size
-					pkg.size_bytes = GetPackageSize(pkg.name, pkg.type);
+		// Calculate package size
+		pkg.size_bytes = GetPackageSize(pkg.name, pkg.type);
 
-					if (!pkg.name.empty()) {
-						packages.push_back(pkg);
-					}
-					i++;
-				} catch (...) {
-					// No more elements in array
-					break;
-				}
-			}
-		} catch (...) {
-			// No formulas or error parsing
+		if (!pkg.name.empty()) {
+			packages.push_back(pkg);
 		}
+	}
 
-		// Parse casks
-		try {
-			auto &casks = json->GetObject("casks");
-			idx_t i = 0;
-			while (true) {
-				try {
-					BrewPackage pkg;
-					pkg.type = "cask";
-					pkg.installed_on_request = true;
+	// Parse casks
+	yyjson_val *cask;
+	yyjson_arr_foreach(yyjson_obj_get(root, "casks"), idx, max, cask) {
+		BrewPackage pkg;
+		pkg.type = "cask";
+		pkg.installed_on_request = true;
 
-					auto &cask = casks.GetArrayElement(i);
-					pkg.name = GetStringValue(cask, "token");
-					pkg.description = GetStringValue(cask, "desc");
-					pkg.homepage = GetStringValue(cask, "homepage");
-					pkg.version = GetStringValue(cask, "version");
-					pkg.tap = GetStringValue(cask, "tap");
-					pkg.installed_time = GetInt64Value(cask, "installed_time");
+		pkg.name = GetStringValue(cask, "token");
+		pkg.description = GetStringValue(cask, "desc");
+		pkg.homepage = GetStringValue(cask, "homepage");
+		pkg.version = GetStringValue(cask, "version");
+		pkg.tap = GetStringValue(cask, "tap");
+		pkg.installed_time = GetInt64Value(cask, "installed_time");
 
-					// Cask-specific defaults
-					pkg.license = "";
-					pkg.installed_as_dependency = false;
-					pkg.poured_from_bottle = false;
-					pkg.built_as_bottle = false;
-					pkg.dependencies = "";
+		// Cask-specific defaults
+		pkg.license = "";
+		pkg.installed_as_dependency = false;
+		pkg.poured_from_bottle = false;
+		pkg.built_as_bottle = false;
+		pkg.dependencies = "";
 
-					// Status flags
-					pkg.outdated = GetBoolValue(cask, "outdated");
-					pkg.pinned = false; // Casks don't get pinned
-					pkg.deprecated = GetBoolValue(cask, "deprecated");
-					pkg.disabled = GetBoolValue(cask, "disabled");
-					pkg.deprecation_reason = GetStringValue(cask, "deprecation_reason");
-					pkg.disable_reason = GetStringValue(cask, "disable_reason");
-					pkg.caveats = GetStringValue(cask, "caveats");
-					pkg.aliases = GetArrayAsCommaSeparated(cask, "old_tokens");
+		// Status flags
+		pkg.outdated = GetBoolValue(cask, "outdated");
+		pkg.pinned = false; // Casks don't get pinned
+		pkg.deprecated = GetBoolValue(cask, "deprecated");
+		pkg.disabled = GetBoolValue(cask, "disabled");
+		pkg.deprecation_reason = GetStringValue(cask, "deprecation_reason");
+		pkg.disable_reason = GetStringValue(cask, "disable_reason");
+		pkg.caveats = GetStringValue(cask, "caveats");
+		pkg.aliases = GetArrayAsCommaSeparated(cask, "old_tokens");
 
-					// Calculate package size
-					pkg.size_bytes = GetPackageSize(pkg.name, pkg.type);
+		// Calculate package size
+		pkg.size_bytes = GetPackageSize(pkg.name, pkg.type);
 
-					if (!pkg.name.empty()) {
-						packages.push_back(pkg);
-					}
-					i++;
-				} catch (...) {
-					// No more elements in array
-					break;
-				}
-			}
-		} catch (...) {
-			// No casks or error parsing
+		if (!pkg.name.empty()) {
+			packages.push_back(pkg);
 		}
-
-	} catch (std::exception &e) {
-		throw IOException("Failed to parse brew JSON output: " + string(e.what()));
 	}
 
 	return packages;
@@ -304,7 +274,7 @@ static unique_ptr<LocalTableFunctionState> BrewInitLocal(ExecutionContext &conte
 }
 
 static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                 vector<LogicalType> &return_types, vector<string> &names) {
+                                                 vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<BrewPackagesBindData>();
 	result->filter_type = "all";
 
@@ -387,7 +357,7 @@ static unique_ptr<FunctionData> BrewPackagesBind(ClientContext &context, TableFu
 }
 
 static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFunctionBindInput &input,
-                                                 vector<LogicalType> &return_types, vector<string> &names) {
+                                                 vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<BrewPackagesBindData>();
 	result->filter_type = "formula";
 
@@ -472,7 +442,7 @@ static unique_ptr<FunctionData> BrewFormulasBind(ClientContext &context, TableFu
 }
 
 static unique_ptr<FunctionData> BrewCasksBind(ClientContext &context, TableFunctionBindInput &input,
-                                              vector<LogicalType> &return_types, vector<string> &names) {
+                                              vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<BrewPackagesBindData>();
 	result->filter_type = "cask";
 
@@ -657,7 +627,7 @@ static void BrewCasksFunction(ClientContext &context, TableFunctionInput &data_p
 }
 
 static unique_ptr<FunctionData> BrewDependenciesBind(ClientContext &context, TableFunctionBindInput &input,
-                                                     vector<LogicalType> &return_types, vector<string> &names) {
+                                                     vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<BrewDependenciesBindData>();
 
 	string brew_output;
@@ -762,7 +732,7 @@ static string CategorizeConfig(const string &name) {
 }
 
 static unique_ptr<FunctionData> BrewConfigBind(ClientContext &context, TableFunctionBindInput &input,
-                                               vector<LogicalType> &return_types, vector<string> &names) {
+                                               vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<BrewConfigBindData>();
 
 	string config_output = ExecuteCommand("brew config 2>/dev/null");
@@ -851,7 +821,7 @@ static string CategorizeDoctor(const string &warning) {
 }
 
 static unique_ptr<FunctionData> BrewDoctorBind(ClientContext &context, TableFunctionBindInput &input,
-                                               vector<LogicalType> &return_types, vector<string> &names) {
+                                               vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto result = make_uniq<BrewDoctorBindData>();
 
 	// brew doctor often returns non-zero if there are warnings, and outputs to stderr
