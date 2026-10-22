@@ -158,8 +158,8 @@ static vector<BrewPackage> ParseBrewJSON(const string &json_output) {
 
 	yyjson_read_err error;
 	unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> doc(
-	    yyjson_read_opts(const_cast<char *>(json_output.c_str()), json_output.size(),
-	                     YYJSON_READ_ALLOW_INVALID_UNICODE, nullptr, &error),
+	    yyjson_read_opts(const_cast<char *>(json_output.c_str()), json_output.size(), YYJSON_READ_ALLOW_INVALID_UNICODE,
+	                     nullptr, &error),
 	    yyjson_doc_free);
 	if (!doc) {
 		throw IOException("Failed to parse brew JSON output: " + string(error.msg));
